@@ -19,12 +19,11 @@ _TEHRAN_OFFSET = datetime.timedelta(hours=3, minutes=30)
 
 
 async def _maybe_daily(app):
-    today = (datetime.datetime.utcnow() + _TEHRAN_OFFSET).strftime("%Y-%m-%d")
-    last = db.get_meta("last_daily")
-    if last is None:
-        db.set_meta("last_daily", today)  # روز اول: فقط ثبت، بدون ارسال
+    now = datetime.datetime.utcnow() + _TEHRAN_OFFSET
+    if now.hour != 0:  # فقط راس نیمه‌شب تهران (۰۰:۰۰–۰۰:۵۹)
         return
-    if last == today:
+    today = now.strftime("%Y-%m-%d")
+    if db.get_meta("last_daily") == today:  # امروز قبلاً فرستاده شده
         return
     try:
         await app.bot.send_message(
