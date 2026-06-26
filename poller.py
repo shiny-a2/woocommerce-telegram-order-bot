@@ -5,12 +5,35 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import time
 
 import config
 import db
 import pipeline
+import reports
 import woo
+
+# خلاصه‌ی روزانه راس نیمه‌شب تهران (UTC+3:30، بدون DST)
+_TEHRAN_OFFSET = datetime.timedelta(hours=3, minutes=30)
+
+
+async def _maybe_daily(app):
+    today = (datetime.datetime.utcnow() + _TEHRAN_OFFSET).strftime("%Y-%m-%d")
+    last = db.get_meta("last_daily")
+    if last is None:
+        db.set_meta("last_daily", today)  # روز اول: فقط ثبت، بدون ارسال
+        return
+    if last == today:
+        return
+    try:
+        await app.bot.send_message(
+            chat_id=config.TELEGRAM_GROUP_ID, text=await reports.daily_summary_text()
+        )
+        db.set_meta("last_daily", today)
+        print("[daily] خلاصه‌ی فروش دیروز ارسال شد.")
+    except Exception as e:
+        print(f"[daily] ارسال خلاصه ناموفق بود: {e}")
 
 
 async def _poll_orders(app):
@@ -45,4 +68,5 @@ async def run(app):
     while True:
         await _poll_orders(app)
         await _poll_edits(app)
+        await _maybe_daily(app)
         await asyncio.sleep(config.POLL_INTERVAL_SECONDS)

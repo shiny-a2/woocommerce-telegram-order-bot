@@ -297,3 +297,22 @@ async def orders_csv(jy, jm):
             fmt_money(o.get("total")), o.get("status"),
         ])
     return buf.getvalue()
+
+
+# تهران بدون DST: همیشه UTC+3:30
+_TEHRAN_OFFSET = datetime.timedelta(hours=3, minutes=30)
+
+
+def tehran_now():
+    return datetime.datetime.utcnow() + _TEHRAN_OFFSET
+
+
+async def daily_summary_text():
+    """خلاصه‌ی فروش «دیروزِ تهران» (برای ارسال خودکار راس نیمه‌شب تهران)."""
+    y = (tehran_now() - datetime.timedelta(days=1)).date()  # دیروزِ تهران (میلادی)
+    yj = jdatetime.date.fromgregorian(date=y)
+    start = datetime.datetime(y.year, y.month, y.day)
+    end = start + datetime.timedelta(days=1)
+    label = f"{J_MONTHS[yj.month - 1]} {yj.day}، {yj.year}"
+    body = _format_report(label, *(await _aggregate(start, end)))
+    return "🌅 خلاصه‌ی فروش دیروز\n\n" + body
