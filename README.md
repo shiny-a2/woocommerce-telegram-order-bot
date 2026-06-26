@@ -1,45 +1,48 @@
 # woo-orderbot
 
-ربات تلگرامی اطلاع‌رسانی و مدیریت سفارش‌های ووکامرس.
+A Telegram bot that turns WooCommerce orders into **live, self-updating order
+cards** in a group chat, with an interactive sales dashboard for admins.
 
-با هر سفارش موفق، یک «کارت سفارش» شامل عکس شاخص محصول و مشخصات کامل (با تاریخ شمسی)
-داخل گروه تلگرام درج می‌شود. این کارت **زنده** است: با هر تغییر بعدی — تغییر وضعیت،
-تعویض محصول، اصلاح قیمت، الباقی پرداخت — کپشنِ همان پیام به‌جای ارسال پیام جدید،
-به‌صورت درجا ویرایش می‌شود. اعضای مجاز هم گزارش فروش به تفکیک درگاه و در بازه‌های
-تقویم شمسی دریافت می‌کنند.
+For every paid order it posts a rich card — featured product image plus full
+order details with a Jalali (Shamsi) date. That card is *live*: as the order
+changes (status transitions, product swaps, price corrections, balance
+payments) the bot edits the same message in place instead of sending reply
+spam. Admins get an inline-keyboard menu for per-gateway sales reports over
+Shamsi date ranges, plus full order search.
 
 ---
 
-## ویژگی‌ها
+## Features
 
-- **کارت سفارش زنده** — کپشن با تغییر وضعیت/قیمت/محصول درجا ویرایش می‌شود، نه ریپلای.
-- **عکس شاخص محصول** — مستقیم از REST گرفته و به JPEG تبدیل می‌شود؛ روی دیسک چیزی ذخیره نمی‌ماند.
-- **تاریخ و گزارش شمسی** — تاریخ سفارش و بازه‌های گزارش بر پایه‌ی تقویم جلالی.
-- **تشخیص دوگانه** — وب‌هوک لحظه‌ای به‌علاوه‌ی پولینگ پشتیبان؛ هیچ سفارشی گم نمی‌شود.
-- **استان دقیق** — نگاشت کد استان به نام فارسی از خود ووکامرس.
-- **موقعیت موجودی هوشمند** — تشخیص خودکار «فروشگاه/انبار» از موجودی، و به‌روزرسانی با مقدار دقیقِ افزونه.
-- **اصلاحات مالی خوانا** — مبلغ پرداختی، الباقی و روش آن، جمع نهایی و عودت، به‌صورت مرتب.
-- **سرویس خودترمیم** — به‌صورت Scheduled Task با راه‌اندازی خودکار پس از ری‌استارت و بازیابی پس از خطا.
+- **Live order cards** — captions are edited in place on every change; no reply spam.
+- **Featured product image** — fetched from the REST API and converted to JPEG; nothing is persisted to disk.
+- **Jalali (Shamsi) calendar** — order dates and every sales range use the Persian calendar.
+- **Dual delivery** — instant webhook plus a polling fallback, so no order is missed.
+- **Interactive admin menu** — inline keyboard: today / week / month / year, a month picker, and order search.
+- **Per-gateway sales reports** — revenue split by payment gateway for any Shamsi month or custom range, with totals.
+- **Order search** — by phone, customer name, or part of a product name; each match is sent as a full card.
+- **Plugin-aware** — parses order-edit plugin notes (product swap, price fix, balance payment) into a clean summary, and reflects the precise stock location.
+- **Self-healing service** — runs as a Windows scheduled task with start-on-boot and crash recovery.
 
-## معماری
+## Architecture
 
 ```
 WooCommerce (REST + Webhook)
         │
         ▼
-   poller / webhook ──► pipeline ──► Telegram (گروه)
+   poller / webhook ──► pipeline ──► Telegram group
         │                  │
-        │                  ├─ عکس شاخص (Pillow)
-        │                  ├─ کپشن (استان، موجودی، اصلاحات پلاگین)
-        │                  └─ ویرایش زنده‌ی کپشن
+        │                  ├─ featured image (Pillow)
+        │                  ├─ caption (province, stock, plugin edits)
+        │                  └─ in-place caption editing
         ▼
-     SQLite (نگاشت سفارش ↔ پیام، وضعیت، کپشن)
+     SQLite (order ↔ message map, status, caption)
 ```
 
-مغز ربات روی سروری اجرا می‌شود که دسترسی تلگرام دارد؛ فروشگاه ووکامرس می‌تواند جای
-دیگری باشد و فقط منبع داده است.
+The bot runs wherever Telegram is reachable; the WooCommerce store can live
+elsewhere and acts purely as the data source.
 
-## نمونه‌ی کارت سفارش
+## Example order card (live output)
 
 ```
 🧾 شماره سفارش: 292148
@@ -47,71 +50,66 @@ WooCommerce (REST + Webhook)
 ✅ وضعیت: تحویل شده
 
 💳 روش پرداخت: …
-🚚 روش حمل: پست
 👤 خریدار: …
 📞 تماس: …
 📍 استان: خوزستان
 🏠 آدرس: …
 📮 کدپستی: …
 
-🛍️ محصول: ساعت مردانه لی کوپر LC08016.230
+🛍️ محصول: …
 📦 موقعیت موجودی: جهانشهر
 
 ➖ اصلاحات سفارش:
-🔄 تعویض : محصول قبلی
-با : محصول جدید
+🔄 تعویض : قبلی → با : جدید
 💳 مبلغ پرداختی: ۹٬۶۵۰٬۰۰۰ تومان
-💵 الباقی: ۱۰٬۰۰۰ تومان (روش: …)
+💵 الباقی: ۱۰٬۰۰۰ تومان
 🧮 جمع نهایی: ۹٬۶۶۰٬۰۰۰ تومان
-
-📋 ثبت عملیات سفارش:
-فاکتور: ۳۰۵
-جعبه: ✅  پاکت: ✅  گارانتی: ✅  باطری: ✅
 ```
 
-## راه‌اندازی
+## Quick start
 
-نیازمندی: Python 3.11+
+Requires Python 3.11+
 
 ```bash
 python -m virtualenv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
-copy .env.example .env      # سپس مقادیر را پر کنید
-python get_chat_id.py       # یافتن آیدی گروه و ادمین‌ها
+copy .env.example .env      # then fill in the values
+python get_chat_id.py       # find your group id and admin ids
 python main.py
 ```
 
-> روی ویندوز، برای اجرای پایدار به‌صورت سرویس، `main.py` را مستقیم با پایتونِ همین
-> محیط مجازی اجرا کنید (مثلاً با یک Scheduled Task روی تریگر «At startup»).
+> On Windows, for a stable always-on service, run `main.py` directly with this
+> virtualenv's Python (e.g. a Scheduled Task on the "At startup" trigger).
 
-## پیکربندی (`.env`)
+## Configuration (`.env`)
 
-| کلید | توضیح |
+| Key | Description |
 |---|---|
-| `TELEGRAM_BOT_TOKEN` | توکن ربات از BotFather |
-| `TELEGRAM_GROUP_ID` | آیدی گروه مقصد |
-| `ADMIN_USER_IDS` | آیدی اعضای مجاز گزارش‌گیری (با ویرگول) |
-| `WOO_URL` / `WOO_CK` / `WOO_CS` | آدرس و کلیدهای REST ووکامرس |
-| `POST_STATUSES` | وضعیت‌هایی که درج می‌شوند (پیش‌فرض: `processing,completed`) |
-| `MONEY_DIVISOR` | تقسیم‌کننده‌ی واحد پول (ریال→تومان = `10`) |
-| `POLL_INTERVAL_SECONDS` | فاصله‌ی پولینگ |
-| `WEBHOOK_ENABLED` | فعال‌سازی وب‌هوک لحظه‌ای (اختیاری) |
+| `TELEGRAM_BOT_TOKEN` | Bot token from BotFather |
+| `TELEGRAM_GROUP_ID` | Destination group id |
+| `ADMIN_USER_IDS` | Comma-separated admin user ids (reports & search) |
+| `WOO_URL` / `WOO_CK` / `WOO_CS` | WooCommerce REST URL and keys |
+| `POST_STATUSES` | Order statuses to post (e.g. `processing,completed,delivered`) |
+| `MONEY_DIVISOR` | Currency divisor (Rial→Toman = `10`) |
+| `POLL_INTERVAL_SECONDS` | Polling interval |
+| `WEBHOOK_ENABLED` | Enable the instant webhook (optional) |
 
-## دستورهای گزارش
+## Admin menu & commands
 
-| دستور | کارکرد |
-|---|---|
-| `/sales` | فروش امروز (به تفکیک درگاه) |
-| `/week` | فروش این هفته‌ی شمسی |
-| `/month` | فروش این ماه شمسی |
-| `/range ۱۴۰۳/۰۱/۰۱ ۱۴۰۳/۰۱/۳۱` | بازه‌ی دلخواه |
+The admin menu (`/start` or `/menu`) is an inline keyboard:
 
-## پشته‌ی فنی
+- **Today / This week / This month / This year** — quick sales reports
+- **Pick a month** — per-gateway revenue for any Shamsi month, with total
+- **Search order** — type a phone, name, or product keyword to get matching cards
+
+`/range ۱۴۰۳/۰۱/۰۱ ۱۴۰۳/۰۱/۳۱` returns a custom-range report.
+
+## Tech stack
 
 Python · python-telegram-bot · WooCommerce REST API · Pillow · jdatetime ·
-FastAPI/Uvicorn (وب‌هوک) · SQLite
+FastAPI/Uvicorn (webhook) · SQLite
 
 ---
 
-تمام داده‌های حساس در `.env` نگه‌داری می‌شوند و خارج از مخزن قرار دارند.
+All sensitive data lives in `.env` and is kept out of version control.

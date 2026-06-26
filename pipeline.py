@@ -1,7 +1,7 @@
 """خط پردازش سفارش: درج سفارش جدید + ویرایش کپشنِ سفارش‌های تغییریافته.
 
-کپشن یک پیامِ «زنده» است: با هر تغییر وضعیت یا اصلاح پلاگین، به‌جای ریپلای،
-کپشن همان پیام بازسازی و در صورت اختلاف ویرایش می‌شود.
+کپشن یک پیامِ «زنده» است: با هر تغییر، کپشن همان پیام بازسازی و در صورت اختلاف
+ویرایش می‌شود. تابع build_order_card هم برای درج اولیه و هم برای جستجو استفاده می‌شود.
 """
 from __future__ import annotations
 
@@ -52,6 +52,37 @@ async def _safe_notes(order_id):
         return []
 
 
+async def build_order_card(order):
+    """(photos, caption, stock_location) برای یک سفارش می‌سازد (عکس شاخص + کپشن کامل)."""
+    photos, locations = [], []
+    for it in (order.get("line_items") or [])[: config.MAX_PHOTOS]:
+        pid = it.get("product_id")
+        product = None
+        if pid:
+            try:
+                product = await woo.get_product(pid)
+            except Exception as e:
+                print(f"[pipeline] محصول {pid} گرفته نشد: {e}")
+
+        src = (it.get("image") or {}).get("src")
+        if not src and product:
+            imgs = product.get("images") or []
+            src = imgs[0]["src"] if imgs else None
+        if src:
+            jpg = await media.fetch_jpeg(src)
+            if jpg:
+                photos.append(jpg)
+
+        loc = _stock_location(product, it.get("quantity", 1))
+        if loc:
+            locations.append(loc)
+
+    stock_location = "، ".join(dict.fromkeys(locations)) if locations else None
+    summary = plugin_events.summarize(await _safe_notes(order.get("id")))
+    caption = telegram_io.build_caption(order, stock_location, summary)
+    return photos, caption, stock_location
+
+
 async def process_order(app, order_id: int):
     lock = await _order_lock(order_id)
     async with lock:
@@ -60,35 +91,7 @@ async def process_order(app, order_id: int):
         order = await woo.get_order(order_id)
         if not _should_post(order):
             return
-
-        photos = []
-        locations = []
-        for it in (order.get("line_items") or [])[: config.MAX_PHOTOS]:
-            pid = it.get("product_id")
-            product = None
-            if pid:
-                try:
-                    product = await woo.get_product(pid)
-                except Exception as e:
-                    print(f"[pipeline] محصول {pid} گرفته نشد: {e}")
-
-            src = (it.get("image") or {}).get("src")
-            if not src and product:
-                imgs = product.get("images") or []
-                src = imgs[0]["src"] if imgs else None
-            if src:
-                jpg = await media.fetch_jpeg(src)
-                if jpg:
-                    photos.append(jpg)
-
-            loc = _stock_location(product, it.get("quantity", 1))
-            if loc:
-                locations.append(loc)
-
-        stock_location = "، ".join(dict.fromkeys(locations)) if locations else None
-        summary = plugin_events.summarize(await _safe_notes(order_id))
-
-        caption = telegram_io.build_caption(order, stock_location, summary)
+        photos, caption, stock_location = await build_order_card(order)
         msg_id = await telegram_io.post_order(app, order, photos, caption)
         db.mark_posted(order_id, msg_id, config.TELEGRAM_GROUP_ID, order.get("status"), stock_location, caption)
         print(f"[pipeline] سفارش {order_id} درج شد (پیام {msg_id}، {len(photos)} عکس).")
@@ -113,7 +116,6 @@ async def rebuild_and_edit(app, order_id: int):
         db.update_after_edit(order_id, order.get("status"), caption_new)
         print(f"[edit] کپشن سفارش {order_id} به‌روزرسانی شد.")
     except Exception as e:
-        # «message is not modified» را بی‌صدا رد کن
         if "not modified" not in str(e).lower():
             print(f"[edit] ویرایش سفارش {order_id} ناموفق: {e}")
         else:

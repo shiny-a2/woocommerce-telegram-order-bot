@@ -1,11 +1,19 @@
-"""سمت تلگرام: ارسال سفارش، ویرایش کپشن و دستورهای گزارش."""
+"""سمت تلگرام: ارسال سفارش، ویرایش کپشن، منوی دکمه‌ای گزارش‌ها و جستجوی سفارش."""
 from __future__ import annotations
 
+import asyncio
 import html
 
-from telegram import InputMediaPhoto, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Update
 from telegram.constants import ParseMode
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import (
+    Application,
+    CallbackQueryHandler,
+    CommandHandler,
+    ContextTypes,
+    MessageHandler,
+    filters,
+)
 
 import config
 import reports
@@ -57,8 +65,7 @@ def _product_line(order) -> str:
 def build_caption(order, stock_location=None, summary=None) -> str:
     f = woo.caption_fields(order)
     summary = summary or {}
-    # موقعیت دقیقِ پلاگین جای مقدار محاسبه‌شده می‌نشیند (وقتی پلاگین ثبتش کرد)
-    location = summary.get("location") or stock_location
+    location = summary.get("location") or stock_location  # موقعیت دقیقِ پلاگین مقدم است
     corrections = summary.get("corrections")
     operations = summary.get("operations")
 
@@ -81,7 +88,6 @@ def build_caption(order, stock_location=None, summary=None) -> str:
     lines.append(_product_line(order))
     if location:
         lines.append(f"📦 موقعیت موجودی: {_esc(location)}")
-    # وقتی اصلاح مالی هست، «مبلغ پرداختی» داخل بخش اصلاحات می‌آید (تکرار نشود)
     if not summary.get("has_payment"):
         lines.append(f"💰 مبلغ پرداختی: {reports.fmt_money(f['total'])} {config.CURRENCY_LABEL}")
     if corrections:
@@ -95,70 +101,148 @@ def build_caption(order, stock_location=None, summary=None) -> str:
     return "\n".join(lines)
 
 
-async def post_order(app: Application, order, photos, caption) -> int:
-    """photos: لیستی از بایت‌های JPEG. کپشن کامل روی عکس اول می‌نشیند."""
-    chat_id = config.TELEGRAM_GROUP_ID
+async def send_card(app: Application, chat_id, photos, caption) -> int:
+    """یک کارت سفارش (آلبوم عکس + کپشن) را به چت داده‌شده می‌فرستد و آیدی پیام اول را برمی‌گرداند."""
     if photos:
-        media_items = []
-        for i, data in enumerate(photos):
-            if i == 0:
-                media_items.append(
-                    InputMediaPhoto(media=data, caption=caption, parse_mode=ParseMode.HTML)
-                )
-            else:
-                media_items.append(InputMediaPhoto(media=data))
-        msgs = await app.bot.send_media_group(chat_id=chat_id, media=media_items)
+        items = [InputMediaPhoto(media=photos[0], caption=caption, parse_mode=ParseMode.HTML)]
+        items += [InputMediaPhoto(media=d) for d in photos[1:]]
+        msgs = await app.bot.send_media_group(chat_id=chat_id, media=items)
         return msgs[0].message_id
     msg = await app.bot.send_message(chat_id=chat_id, text=caption, parse_mode=ParseMode.HTML)
     return msg.message_id
 
 
+async def post_order(app: Application, order, photos, caption) -> int:
+    return await send_card(app, config.TELEGRAM_GROUP_ID, photos, caption)
+
+
 async def edit_caption(app: Application, message_id, chat_id, caption):
-    """کپشن یک پیام قبلی را ویرایش می‌کند (بدون محدودیت زمانی برای پیام‌های خود ربات)."""
     await app.bot.edit_message_caption(
         chat_id=chat_id, message_id=message_id, caption=caption, parse_mode=ParseMode.HTML
     )
 
 
-# ---------- دستورهای گزارش (فقط اعضای مجاز) ----------
+# ---------- منو، گزارش‌ها و جستجو (فقط اعضای مجاز) ----------
+
+_MENU_TITLE = "🛍️ <b>منوی مدیریت فروش</b>\nیک گزینه را انتخاب کنید:"
+
 
 def _authorized(update: Update) -> bool:
     uid = update.effective_user.id if update.effective_user else 0
     return uid in config.ADMIN_USER_IDS
 
 
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not _authorized(update):
-        return
-    await update.message.reply_text(
-        "ربات فعال است.\n"
-        "دستورها:\n"
-        "/sales — فروش امروز\n"
-        "/week — فروش این هفته\n"
-        "/month — فروش این ماه\n"
-        "/range ۱۴۰۳/۰۱/۰۱ ۱۴۰۳/۰۱/۳۱ — بازه‌ی دلخواه"
-    )
+def _main_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 فروش امروز", callback_data="rep:today"),
+         InlineKeyboardButton("📅 این هفته", callback_data="rep:week")],
+        [InlineKeyboardButton("🗓️ این ماه", callback_data="rep:month"),
+         InlineKeyboardButton("📈 کل امسال", callback_data="rep:year")],
+        [InlineKeyboardButton("📆 انتخاب ماه (به تفکیک درگاه)", callback_data="menu:months")],
+        [InlineKeyboardButton("🔍 جستجوی سفارش", callback_data="search")],
+    ])
 
 
-async def _send_report(update, kind):
+def _months_menu(jy):
+    rows, row = [], []
+    for m in range(1, 13):
+        row.append(InlineKeyboardButton(reports.J_MONTHS[m - 1], callback_data=f"jm:{jy}:{m}"))
+        if len(row) == 3:
+            rows.append(row)
+            row = []
+    if row:
+        rows.append(row)
+    nav = [InlineKeyboardButton(f"◀ {jy - 1}", callback_data=f"months:{jy - 1}")]
+    if jy < reports.current_jyear():
+        nav.append(InlineKeyboardButton(f"{jy + 1} ▶", callback_data=f"months:{jy + 1}"))
+    rows.append(nav)
+    rows.append([InlineKeyboardButton("🔙 منو", callback_data="menu:main")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _back_kb():
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 منو", callback_data="menu:main")]])
+
+
+async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _authorized(update):
         return
+    context.user_data["awaiting_search"] = False
+    await update.message.reply_text(_MENU_TITLE, reply_markup=_main_menu(), parse_mode=ParseMode.HTML)
+
+
+async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q:
+        return
+    if not q.from_user or q.from_user.id not in config.ADMIN_USER_IDS:
+        await q.answer("اجازه‌ی دسترسی ندارید.", show_alert=True)
+        return
+    await q.answer()
+    data = q.data or ""
+    if data != "search":
+        context.user_data["awaiting_search"] = False
     try:
-        await update.message.reply_text(await reports.report(kind))
+        if data == "search":
+            context.user_data["awaiting_search"] = True
+            await q.edit_message_text(
+                "🔍 شماره تماس، نام مشتری، یا بخشی از نام محصول را بفرستید:",
+                reply_markup=_back_kb(),
+            )
+        elif data == "menu:main":
+            await q.edit_message_text(_MENU_TITLE, reply_markup=_main_menu(), parse_mode=ParseMode.HTML)
+        elif data == "menu:months":
+            await q.edit_message_text("📆 یک ماه را انتخاب کنید:", reply_markup=_months_menu(reports.current_jyear()))
+        elif data.startswith("months:"):
+            await q.edit_message_text("📆 یک ماه را انتخاب کنید:", reply_markup=_months_menu(int(data.split(":")[1])))
+        elif data == "rep:today":
+            await q.edit_message_text(await reports.report("today"), reply_markup=_back_kb())
+        elif data == "rep:week":
+            await q.edit_message_text(await reports.report("week"), reply_markup=_back_kb())
+        elif data == "rep:month":
+            await q.edit_message_text(await reports.report("month"), reply_markup=_back_kb())
+        elif data == "rep:year":
+            await q.edit_message_text(await reports.report_jyear(reports.current_jyear()), reply_markup=_back_kb())
+        elif data.startswith("jm:"):
+            _, jy, jm = data.split(":")
+            await q.edit_message_text(await reports.report_jmonth(int(jy), int(jm)), reply_markup=_back_kb())
     except Exception as e:
-        await update.message.reply_text(f"خطا در گزارش: {e}")
+        await q.edit_message_text(f"خطا در گزارش: {e}", reply_markup=_back_kb())
 
 
-async def cmd_sales(update, context):
-    await _send_report(update, "today")
+async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """دریافت عبارت جستجو پس از زدن دکمه‌ی «جستجوی سفارش»."""
+    if not _authorized(update) or not context.user_data.get("awaiting_search"):
+        return
+    context.user_data["awaiting_search"] = False
+    query = (update.message.text or "").strip()
+    if not query:
+        return
+    chat_id = update.effective_chat.id
+    await update.message.reply_text(f"🔍 در حال جستجوی «{query}» …")
+    try:
+        orders = await woo.search_orders(query, per_page=10)
+    except Exception as e:
+        await update.message.reply_text(f"خطا در جستجو: {e}")
+        return
+    if not orders:
+        await update.message.reply_text("سفارشی با این مشخصات پیدا نشد.", reply_markup=_back_kb())
+        return
 
+    import pipeline  # واردسازی تنبل برای جلوگیری از حلقه‌ی ایمپورت
 
-async def cmd_week(update, context):
-    await _send_report(update, "week")
+    for o in orders:
+        try:
+            photos, caption, _ = await pipeline.build_order_card(o)
+            await send_card(context.application, chat_id, photos, caption)
+        except Exception as e:
+            await update.message.reply_text(f"خطا در نمایش سفارش {o.get('id')}: {e}")
+        await asyncio.sleep(1)
 
-
-async def cmd_month(update, context):
-    await _send_report(update, "month")
+    note = f"✅ {len(orders)} سفارش یافت شد."
+    if len(orders) >= 10:
+        note += " (نتایج زیاد بود؛ برای دقیق‌تر شدن عبارت دقیق‌تری بفرستید.)"
+    await update.message.reply_text(note, reply_markup=_back_kb())
 
 
 async def cmd_range(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -174,9 +258,9 @@ async def cmd_range(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def register_handlers(app: Application):
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(CommandHandler("help", cmd_start))
-    app.add_handler(CommandHandler("sales", cmd_sales))
-    app.add_handler(CommandHandler("week", cmd_week))
-    app.add_handler(CommandHandler("month", cmd_month))
+    app.add_handler(CommandHandler("start", cmd_menu))
+    app.add_handler(CommandHandler("menu", cmd_menu))
+    app.add_handler(CommandHandler("help", cmd_menu))
     app.add_handler(CommandHandler("range", cmd_range))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    app.add_handler(CallbackQueryHandler(on_callback))

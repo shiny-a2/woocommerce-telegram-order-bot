@@ -66,6 +66,14 @@ async def list_recent_orders(per_page=20):
     )
 
 
+async def search_orders(query, per_page=10):
+    """جستجوی سفارش بر اساس نام، شماره تماس یا نام محصول (search ووکامرس همه را پوشش می‌دهد)."""
+    return await get(
+        "orders",
+        {"search": query, "per_page": per_page, "orderby": "date", "order": "desc"},
+    )
+
+
 async def list_orders_in_range(after_iso, before_iso):
     """همه‌ی سفارش‌های یک بازه را با صفحه‌بندی برمی‌گرداند (فیلتر وضعیت در reports)."""
     out = []
