@@ -88,6 +88,8 @@ async def process_order(app, order_id: int):
     async with lock:
         if db.is_posted(order_id):
             return
+        if order_id <= int(db.get_meta("baseline_id") or 0):  # محافظ خط مبنا
+            return
         order = await woo.get_order(order_id)
         if not _should_post(order):
             return

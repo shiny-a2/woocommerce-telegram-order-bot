@@ -1,7 +1,4 @@
-"""لایه‌ی کوچک SQLite: نگاشت سفارش→پیام، وضعیت، کپشن و موقعیت موجودی.
-
-کپشن آخرین‌بار ارسال‌شده ذخیره می‌شود تا هنگام تغییر، فقط در صورت اختلاف ویرایش شود.
-"""
+"""لایه‌ی کوچک SQLite: نگاشت سفارش→پیام، وضعیت، کپشن، موقعیت، و متادیتا (خط مبنا)."""
 from __future__ import annotations
 
 import os
@@ -30,13 +27,31 @@ def init():
             posted_at      REAL
         )"""
     )
-    # مهاجرت برای دیتابیس‌های قدیمی
     for col in ("status TEXT", "stock_location TEXT", "caption TEXT"):
         try:
             _conn.execute(f"ALTER TABLE orders ADD COLUMN {col}")
         except sqlite3.OperationalError:
             pass
+    _conn.execute(
+        """CREATE TABLE IF NOT EXISTS seen_notes (
+            note_id  INTEGER PRIMARY KEY,
+            order_id INTEGER
+        )"""
+    )
+    _conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
     _conn.commit()
+
+
+def get_meta(key):
+    with _lock:
+        row = _conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return row[0] if row else None
+
+
+def set_meta(key, value):
+    with _lock:
+        _conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?,?)", (key, str(value)))
+        _conn.commit()
 
 
 def count_orders() -> int:
@@ -65,6 +80,14 @@ def update_after_edit(order_id, status, caption):
             "UPDATE orders SET status=?, caption=? WHERE order_id=?", (status, caption, order_id)
         )
         _conn.commit()
+
+
+def get_message(order_id: int):
+    with _lock:
+        row = _conn.execute(
+            "SELECT message_id, chat_id FROM orders WHERE order_id=?", (order_id,)
+        ).fetchone()
+        return (row[0], row[1]) if row else (None, None)
 
 
 def get_edit_row(order_id):

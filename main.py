@@ -32,24 +32,22 @@ def _setup_logging():
         sys.stdout = stream
         sys.stderr = stream
     except Exception:
-        # اگر فایل لاگ قفل/غیرقابل‌باز بود، با خروجی پیش‌فرض ادامه بده (ربات نیفتد)
         pass
 
 
-async def _seed_existing_orders():
-    """در اولین اجرا، سفارش‌های موجود را «دیده‌شده» علامت بزن تا backfill انجام نشود
-    و فقط سفارش‌های جدیدِ بعد از راه‌اندازی در گروه پست شوند."""
-    if db.count_orders() != 0:
+async def _ensure_baseline():
+    """خط مبنا: فقط سفارش‌هایی با آیدیِ بزرگ‌تر از این مقدار پست می‌شوند؛ سفارش‌های
+    قدیمیِ موجود هرگز پست نمی‌شوند (جلوگیری از backfill/اسپم)."""
+    if db.get_meta("baseline_id") is not None:
         return
     try:
-        existing = await woo.list_recent_orders(per_page=50)
-        for o in existing:
-            oid = o.get("id")
-            if oid:
-                db.mark_posted(oid, 0, config.TELEGRAM_GROUP_ID, o.get("status"))  # message_id=0 یعنی فقط seed
-        print(f"[seed] {len(existing)} سفارش موجود ثبت شد؛ فقط سفارش‌های جدید پست می‌شوند.")
+        orders = await woo.list_recent_orders(per_page=1)
+        baseline = orders[0].get("id") if orders else 0
     except Exception as e:
-        print(f"[seed] ثبت اولیه ناموفق بود: {e}")
+        print(f"[baseline] تعیین خط مبنا ناموفق بود: {e}")
+        baseline = 0
+    db.set_meta("baseline_id", baseline)
+    print(f"[baseline] خط مبنا روی {baseline} تنظیم شد؛ فقط سفارش‌های جدیدتر پست می‌شوند.")
 
 
 async def main():
@@ -69,7 +67,7 @@ async def main():
 
     db.init()
     await woo.load_states()
-    await _seed_existing_orders()
+    await _ensure_baseline()
 
     app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
     telegram_io.register_handlers(app)

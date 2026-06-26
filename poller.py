@@ -14,6 +14,7 @@ import woo
 
 
 async def _poll_orders(app):
+    baseline = int(db.get_meta("baseline_id") or 0)
     try:
         orders = await woo.list_recent_orders(per_page=100)
     except Exception as e:
@@ -21,7 +22,9 @@ async def _poll_orders(app):
         return
     for o in reversed(orders):  # قدیمی‌تر اول
         oid = o.get("id")
-        if oid and not db.is_posted(oid):
+        if not oid or oid <= baseline:  # سفارش‌های قدیمی‌تر از خط مبنا هرگز پست نمی‌شوند
+            continue
+        if not db.is_posted(oid):
             try:
                 await pipeline.process_order(app, oid)
             except Exception as e:
