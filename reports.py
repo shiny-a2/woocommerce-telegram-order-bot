@@ -130,3 +130,170 @@ async def report_jmonth(jy, jm):
 async def report_jyear(jy):
     s, e = _jyear_range(jy)
     return _format_report(f"کل سال {jy}", *(await _aggregate(s, e)))
+
+
+def current_jmonth() -> int:
+    return jdatetime.date.today().month
+
+
+# ---------- آمار و تحلیل ----------
+
+async def _orders_raw(start_dt, end_dt):
+    return await woo.list_orders_in_range(start_dt.isoformat(), end_dt.isoformat())
+
+
+def _is_paid(o):
+    return (not config.PAID_STATUSES) or o.get("status") in config.PAID_STATUSES
+
+
+def _sum_paid(orders):
+    total, count = 0.0, 0
+    for o in orders:
+        if _is_paid(o):
+            total += float(o.get("total") or 0)
+            count += 1
+    return total, count
+
+
+def _prev_jmonth(jy, jm):
+    return (jy, jm - 1) if jm > 1 else (jy - 1, 12)
+
+
+def _jmonth_len(jy, jm):
+    start = jdatetime.date(jy, jm, 1).togregorian()
+    nxt = (jdatetime.date(jy, jm + 1, 1) if jm < 12 else jdatetime.date(jy + 1, 1, 1)).togregorian()
+    return (nxt - start).days
+
+
+async def report_compare():
+    """مقایسه‌ی ماه جاری (تا امروز) با همان بازه از ماه قبل."""
+    jt = jdatetime.date.today()
+    cs = jdatetime.date(jt.year, jt.month, 1).togregorian()
+    cur_total, cur_count = _sum_paid(await _orders_raw(
+        datetime.datetime(cs.year, cs.month, cs.day), datetime.datetime.now()))
+
+    pjy, pjm = _prev_jmonth(jt.year, jt.month)
+    pday = min(jt.day, _jmonth_len(pjy, pjm))
+    ps = jdatetime.date(pjy, pjm, 1).togregorian()
+    pe = jdatetime.date(pjy, pjm, pday).togregorian()
+    prev_total, prev_count = _sum_paid(await _orders_raw(
+        datetime.datetime(ps.year, ps.month, ps.day),
+        datetime.datetime(pe.year, pe.month, pe.day, 23, 59, 59)))
+
+    if prev_total:
+        g = (cur_total - prev_total) / prev_total * 100
+        growth = f"{'🟢 +' if g >= 0 else '🔴 '}{g:.0f}٪"
+    else:
+        growth = "—"
+    return "\n".join([
+        f"📊 مقایسه‌ی ماهانه (تا روز {jt.day})",
+        "",
+        f"▫️ {J_MONTHS[jt.month - 1]} (جاری): {fmt_money(cur_total)} {config.CURRENCY_LABEL} — {cur_count} سفارش",
+        f"▫️ {J_MONTHS[pjm - 1]} (قبل): {fmt_money(prev_total)} {config.CURRENCY_LABEL} — {prev_count} سفارش",
+        "",
+        f"📈 رشد: {growth}",
+    ])
+
+
+async def report_top_products(jy, jm, limit=10):
+    s, e = _jmonth_range(jy, jm)
+    agg = {}
+    for o in await _orders_raw(s, e):
+        if not _is_paid(o):
+            continue
+        for li in o.get("line_items", []):
+            nm = li.get("name") or "؟"
+            a = agg.setdefault(nm, [0, 0.0])
+            a[0] += li.get("quantity") or 0
+            a[1] += float(li.get("total") or 0)
+    top = sorted(agg.items(), key=lambda x: -x[1][1])[:limit]
+    lines = [f"🏆 پرفروش‌ترین محصولات — {J_MONTHS[jm - 1]} {jy}", ""]
+    for i, (nm, (q, rev)) in enumerate(top, 1):
+        lines.append(f"{i}. {nm} — {int(q)} عدد، {fmt_money(rev)} {config.CURRENCY_LABEL}")
+    if not top:
+        lines.append("— موردی نبود —")
+    return "\n".join(lines)
+
+
+async def report_stats(jy, jm):
+    s, e = _jmonth_range(jy, jm)
+    orders = await _orders_raw(s, e)
+    paid_total, paid_count = _sum_paid(orders)
+    all_count = len(orders)
+    bad = sum(1 for o in orders if o.get("status") in ("cancelled", "refunded", "failed"))
+    aov = paid_total / paid_count if paid_count else 0
+    rate = bad / all_count * 100 if all_count else 0
+    return "\n".join([
+        f"🧮 آمار کلی — {J_MONTHS[jm - 1]} {jy}",
+        "",
+        f"🧾 سفارش موفق: {paid_count}",
+        f"💰 فروش کل: {fmt_money(paid_total)} {config.CURRENCY_LABEL}",
+        f"📊 میانگین هر سفارش: {fmt_money(aov)} {config.CURRENCY_LABEL}",
+        f"❌ لغو/مرجوع/ناموفق: {bad} ({rate:.0f}٪)",
+    ])
+
+
+async def report_by_province(jy, jm):
+    s, e = _jmonth_range(jy, jm)
+    agg = {}
+    for o in await _orders_raw(s, e):
+        if not _is_paid(o):
+            continue
+        b = o.get("billing", {}) or {}
+        sh = o.get("shipping", {}) or {}
+        code = (sh.get("state") if sh.get("address_1") else b.get("state")) or ""
+        name = woo.state_name(code) or "نامشخص"
+        agg[name] = agg.get(name, 0.0) + float(o.get("total") or 0)
+    top = sorted(agg.items(), key=lambda x: -x[1])
+    lines = [f"🗺️ فروش به تفکیک استان — {J_MONTHS[jm - 1]} {jy}", ""]
+    for nm, amt in top[:15]:
+        lines.append(f"• {nm}: {fmt_money(amt)} {config.CURRENCY_LABEL}")
+    if not top:
+        lines.append("— موردی نبود —")
+    return "\n".join(lines)
+
+
+async def report_pending():
+    orders = await woo.get(
+        "orders", {"status": "processing", "per_page": 50, "orderby": "date", "order": "asc"}
+    )
+    lines = [f"📦 در انتظار ارسال (در حال انجام): {len(orders)}", ""]
+    for o in orders[:40]:
+        f = caption_fields_brief(o)
+        lines.append(f"#{f[0]} — {f[1]} — {fmt_money(f[2])} {config.CURRENCY_LABEL}")
+    if not orders:
+        lines.append("— موردی نیست —")
+    return "\n".join(lines)
+
+
+def caption_fields_brief(o):
+    b = o.get("billing", {}) or {}
+    name = f"{b.get('first_name', '')} {b.get('last_name', '')}".strip()
+    return (o.get("number") or o.get("id"), name, o.get("total", ""))
+
+
+async def orders_csv(jy, jm):
+    """CSV سفارش‌های موفقِ یک ماه شمسی (متن با هدر فارسی)."""
+    import csv
+    import io
+
+    s, e = _jmonth_range(jy, jm)
+    orders = await _orders_raw(s, e)
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["شماره", "تاریخ", "نام", "تماس", "استان", "محصول", "درگاه", "مبلغ(تومان)", "وضعیت"])
+    for o in orders:
+        if not _is_paid(o):
+            continue
+        b = o.get("billing", {}) or {}
+        sh = o.get("shipping", {}) or {}
+        code = (sh.get("state") if sh.get("address_1") else b.get("state")) or ""
+        prods = "، ".join(li.get("name", "") for li in o.get("line_items", []))
+        jd = jalali_str(o["date_created"]) if o.get("date_created") else ""
+        name = f"{b.get('first_name', '')} {b.get('last_name', '')}".strip()
+        w.writerow([
+            o.get("number") or o.get("id"), jd, name, b.get("phone", ""),
+            woo.state_name(code), prods, o.get("payment_method_title", ""),
+            fmt_money(o.get("total")), o.get("status"),
+        ])
+    return buf.getvalue()

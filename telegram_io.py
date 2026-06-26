@@ -3,8 +3,15 @@ from __future__ import annotations
 
 import asyncio
 import html
+import io
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Update
+from telegram import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InputFile,
+    InputMediaPhoto,
+    Update,
+)
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -139,7 +146,20 @@ def _main_menu():
         [InlineKeyboardButton("🗓️ این ماه", callback_data="rep:month"),
          InlineKeyboardButton("📈 کل امسال", callback_data="rep:year")],
         [InlineKeyboardButton("📆 انتخاب ماه (به تفکیک درگاه)", callback_data="menu:months")],
+        [InlineKeyboardButton("📈 آمار و تحلیل", callback_data="menu:analytics"),
+         InlineKeyboardButton("📦 در انتظار ارسال", callback_data="rep:pending")],
+        [InlineKeyboardButton("📄 خروجی اکسل (این ماه)", callback_data="csv:month")],
         [InlineKeyboardButton("🔍 جستجوی سفارش", callback_data="search")],
+    ])
+
+
+def _analytics_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 مقایسه با ماه قبل", callback_data="rep:compare")],
+        [InlineKeyboardButton("🏆 پرفروش‌ترین محصولات", callback_data="rep:topproducts")],
+        [InlineKeyboardButton("🧮 آمار کلی (این ماه)", callback_data="rep:stats")],
+        [InlineKeyboardButton("🗺️ تفکیک استان (این ماه)", callback_data="rep:province")],
+        [InlineKeyboardButton("🔙 منو", callback_data="menu:main")],
     ])
 
 
@@ -195,6 +215,33 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("📆 یک ماه را انتخاب کنید:", reply_markup=_months_menu(reports.current_jyear()))
         elif data.startswith("months:"):
             await q.edit_message_text("📆 یک ماه را انتخاب کنید:", reply_markup=_months_menu(int(data.split(":")[1])))
+        elif data == "menu:analytics":
+            await q.edit_message_text("📈 آمار و تحلیل — یک گزینه را انتخاب کنید:", reply_markup=_analytics_menu())
+        elif data == "rep:compare":
+            await q.edit_message_text(await reports.report_compare(), reply_markup=_back_kb())
+        elif data == "rep:topproducts":
+            await q.edit_message_text(
+                await reports.report_top_products(reports.current_jyear(), reports.current_jmonth()),
+                reply_markup=_back_kb())
+        elif data == "rep:stats":
+            await q.edit_message_text(
+                await reports.report_stats(reports.current_jyear(), reports.current_jmonth()),
+                reply_markup=_back_kb())
+        elif data == "rep:province":
+            await q.edit_message_text(
+                await reports.report_by_province(reports.current_jyear(), reports.current_jmonth()),
+                reply_markup=_back_kb())
+        elif data == "rep:pending":
+            await q.edit_message_text(await reports.report_pending(), reply_markup=_back_kb())
+        elif data == "csv:month":
+            jy, jm = reports.current_jyear(), reports.current_jmonth()
+            data_bytes = (await reports.orders_csv(jy, jm)).encode("utf-8-sig")
+            await context.bot.send_document(
+                chat_id=q.message.chat_id,
+                document=InputFile(io.BytesIO(data_bytes), filename=f"sales_{jy}_{jm:02d}.csv"),
+                caption=f"📄 سفارش‌های موفق {reports.J_MONTHS[jm - 1]} {jy}",
+            )
+            await q.edit_message_text("📄 فایل اکسل ارسال شد.", reply_markup=_back_kb())
         elif data == "rep:today":
             await q.edit_message_text(await reports.report("today"), reply_markup=_back_kb())
         elif data == "rep:week":
