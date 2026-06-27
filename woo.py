@@ -61,8 +61,9 @@ async def get_notes(order_id: int):
 
 
 async def list_recent_orders(per_page=20):
+    # فقط شناسه و وضعیت لازم است (پردازشِ کامل جداگانه get_order می‌کند) → سبک و سریع
     return await get(
-        "orders", {"per_page": per_page, "orderby": "id", "order": "desc"}
+        "orders", {"per_page": per_page, "orderby": "id", "order": "desc", "_fields": "id,status"}
     )
 
 
@@ -74,28 +75,32 @@ async def search_orders(query, per_page=10):
     )
 
 
+# فقط فیلدهای لازم برای گزارش‌ها → پیلودِ بسیار سبک‌تر و سریع‌تر
+_RANGE_FIELDS = "id,number,status,total,payment_method_title,billing,shipping,line_items,date_created"
+
+
+def _get_paged_sync(endpoint, params):
+    resp = _client().get(endpoint, params=params or {})
+    resp.raise_for_status()
+    total = int(resp.headers.get("X-WP-TotalPages") or 1)
+    return resp.json(), total
+
+
 async def list_orders_in_range(after_iso, before_iso):
-    """همه‌ی سفارش‌های یک بازه را با صفحه‌بندی برمی‌گرداند (فیلتر وضعیت در reports)."""
-    out = []
-    page = 1
-    while True:
-        batch = await get(
-            "orders",
-            {
-                "after": after_iso,
-                "before": before_iso,
-                "per_page": 100,
-                "page": page,
-                "orderby": "date",
-                "order": "asc",
-            },
-        )
-        if not batch:
-            break
-        out.extend(batch)
-        if len(batch) < 100:
-            break
-        page += 1
+    """همه‌ی سفارش‌های یک بازه؛ صفحه‌ی اول برای تعداد صفحات، بقیه به‌صورت موازی."""
+    base = {
+        "after": after_iso, "before": before_iso, "per_page": 100,
+        "orderby": "date", "order": "asc", "_fields": _RANGE_FIELDS,
+    }
+    first, total_pages = await asyncio.to_thread(_get_paged_sync, "orders", {**base, "page": 1})
+    out = list(first)
+    if total_pages > 1:
+        rest = await asyncio.gather(*[
+            asyncio.to_thread(_get_sync, "orders", {**base, "page": p})
+            for p in range(2, total_pages + 1)
+        ])
+        for batch in rest:
+            out.extend(batch)
     return out
 
 

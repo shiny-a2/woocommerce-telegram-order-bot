@@ -1,7 +1,9 @@
 """گزارش فروش با بازه‌های تقویم شمسی (جلالی)."""
 from __future__ import annotations
 
+import asyncio
 import datetime
+import time
 
 import jdatetime
 
@@ -90,7 +92,7 @@ def _jyear_range(jy):
 
 
 async def _aggregate(start_dt, end_dt):
-    orders = await woo.list_orders_in_range(start_dt.isoformat(), end_dt.isoformat())
+    orders = await _orders_raw(start_dt, end_dt)
     by_gw = {}
     total = 0.0
     count = 0
@@ -155,8 +157,21 @@ def current_jmonth() -> int:
 
 # ---------- آمار و تحلیل ----------
 
+_orders_cache = {}  # (after,before) -> (ts, data)
+_CACHE_TTL = 120
+
+
 async def _orders_raw(start_dt, end_dt):
-    return await woo.list_orders_in_range(start_dt.isoformat(), end_dt.isoformat())
+    after, before = start_dt.isoformat(), end_dt.isoformat()
+    key = (after[:16], before[:16])  # پایدار در بازه‌ی یک دقیقه (کش‌خور حتی برای بازه‌های جاری)
+    hit = _orders_cache.get(key)
+    if hit and time.time() - hit[0] < _CACHE_TTL:
+        return hit[1]
+    data = await woo.list_orders_in_range(after, before)
+    if len(_orders_cache) > 60:
+        _orders_cache.clear()
+    _orders_cache[key] = (time.time(), data)
+    return data
 
 
 def _is_paid(o):
@@ -417,11 +432,12 @@ async def report_trend(months=6):
     """روند فروشِ چند ماه اخیر."""
     jt = _jtoday()
     jy, jm = jt.year, jt.month
-    rows = []
+    specs = []
     for _ in range(months):
-        total, count = _sum_paid(await _orders_raw(*_jmonth_range(jy, jm)))
-        rows.append((f"{J_MONTHS[jm - 1]} {jy}", total, count))
+        specs.append((f"{J_MONTHS[jm - 1]} {jy}", _jmonth_range(jy, jm)))
         jy, jm = _prev_jmonth(jy, jm)
+    results = await asyncio.gather(*[_orders_raw(s, e) for _, (s, e) in specs])  # موازی → سریع
+    rows = [(specs[i][0], *_sum_paid(results[i])) for i in range(months)]
     rows.reverse()
     mx = max((t for _, t, _ in rows), default=0) or 1
     lines = [f"📈 روند فروش ({months} ماه اخیر)", ""]
@@ -483,3 +499,33 @@ async def report_gateway_performance(jy, jm):
     if not rows:
         lines.append("— موردی نبود —")
     return "\n".join(lines)
+
+
+# ---------- لیدهای رهاشده (برای پیگیریِ تلفنی) ----------
+
+async def abandoned_leads(days=7):
+    """سفارش‌های رهاشده (failed) چند روز اخیر برای پیگیری."""
+    start = clock.tehran_now() - datetime.timedelta(days=days)
+    return await woo.get("orders", {
+        "status": "failed",
+        "after": start.isoformat(),
+        "per_page": 100,
+        "orderby": "date",
+        "order": "desc",
+        "_fields": "id,number,total,billing,line_items,date_created",
+    })
+
+
+def lead_text(o):
+    b = o.get("billing", {}) or {}
+    name = f"{b.get('first_name', '')} {b.get('last_name', '')}".strip() or "—"
+    prods = "، ".join(li.get("name", "") for li in o.get("line_items", [])) or "—"
+    jd = jalali_str(o["date_created"]).split()[0] if o.get("date_created") else ""
+    return "\n".join([
+        f"📞 پیگیری سفارش رهاشده — #{o.get('number') or o.get('id')}",
+        f"👤 {name}",
+        f"📱 {b.get('phone', '—')}",
+        f"🛍️ {prods}",
+        f"💰 {fmt_money(o.get('total'))} {config.CURRENCY_LABEL}",
+        f"🗓️ {jd}",
+    ])

@@ -23,6 +23,7 @@ from telegram.ext import (
 )
 
 import config
+import db
 import reports
 import woo
 
@@ -149,6 +150,7 @@ def _main_menu():
         [InlineKeyboardButton("📆 انتخاب ماه (به تفکیک درگاه)", callback_data="menu:months")],
         [InlineKeyboardButton("📈 آمار و تحلیل", callback_data="menu:analytics"),
          InlineKeyboardButton("📦 در انتظار ارسال", callback_data="rep:pending")],
+        [InlineKeyboardButton("📞 پیگیری رهاشده‌ها", callback_data="followup")],
         [InlineKeyboardButton("📄 خروجی اکسل (این ماه)", callback_data="csv:month")],
         [InlineKeyboardButton("🔍 جستجوی سفارش", callback_data="search")],
     ])
@@ -251,6 +253,30 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=_back_kb())
         elif data == "rep:pending":
             await q.edit_message_text(await reports.report_pending(), reply_markup=_back_kb())
+        elif data == "followup":
+            if not config.FOLLOWUP_GROUP_ID:
+                await q.edit_message_text(
+                    "⚠️ گروه پیگیری تنظیم نشده.\nربات را در گروهِ پیگیری عضو کن، بعد آیدی گروه را در .env جلوی FOLLOWUP_GROUP_ID بگذار.",
+                    reply_markup=_back_kb())
+            else:
+                leads = await reports.abandoned_leads(7)
+                sent = 0
+                for o in leads:
+                    if db.lead_sent(o.get("id")):
+                        continue
+                    try:
+                        await context.bot.send_message(config.FOLLOWUP_GROUP_ID, text=reports.lead_text(o))
+                        db.mark_lead(o.get("id"))
+                        sent += 1
+                    except Exception:
+                        pass
+                    await asyncio.sleep(0.4)
+                    if sent >= 50:
+                        break
+                await q.edit_message_text(
+                    f"📞 {sent} لیدِ جدیدِ رهاشده به گروه پیگیری ارسال شد.\n"
+                    f"(از {len(leads)} موردِ ۷ روز اخیر؛ موارد قبلاً‌ارسال‌شده دوباره فرستاده نمی‌شوند.)",
+                    reply_markup=_back_kb())
         elif data == "csv:month":
             jy, jm = reports.current_jyear(), reports.current_jmonth()
             data_bytes = (await reports.orders_csv(jy, jm)).encode("utf-8-sig")

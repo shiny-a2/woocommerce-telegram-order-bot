@@ -42,6 +42,7 @@ def _id_list(name):
 # ---------- تلگرام ----------
 TELEGRAM_BOT_TOKEN = _get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_GROUP_ID = _int("TELEGRAM_GROUP_ID", 0)
+FOLLOWUP_GROUP_ID = _int("FOLLOWUP_GROUP_ID", 0)  # گروهِ پیگیریِ سفارش‌های رهاشده
 ADMIN_USER_IDS = _id_list("ADMIN_USER_IDS")
 
 # ---------- ووکامرس ----------
