@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import html
 import io
+import re
 import time
 
 from telegram import (
@@ -198,12 +199,27 @@ def _back_kb():
 _LEAD_ACTIONS = {"contacted": "📞 تماس شد", "noanswer": "🚫 پاسخ نداد", "bought": "✅ خرید کرد"}
 
 
-def _lead_kb(oid):
-    return InlineKeyboardMarkup([[
+def _tg_link(phone):
+    p = re.sub(r"\D", "", phone or "")
+    if not p:
+        return None
+    if p.startswith("00"):
+        p = p[2:]
+    elif p.startswith("0"):
+        p = "98" + p[1:]
+    return f"https://t.me/+{p}"
+
+
+def _lead_kb(oid, phone=None):
+    rows = [[
         InlineKeyboardButton("📞 تماس شد", callback_data=f"lead:contacted:{oid}"),
         InlineKeyboardButton("🚫 پاسخ نداد", callback_data=f"lead:noanswer:{oid}"),
         InlineKeyboardButton("✅ خرید کرد", callback_data=f"lead:bought:{oid}"),
-    ]])
+    ]]
+    link = _tg_link(phone)
+    if link:
+        rows.append([InlineKeyboardButton("💬 پیام در تلگرام", url=link)])
+    return InlineKeyboardMarkup(rows)
 
 
 def _followup_group():
@@ -221,9 +237,12 @@ async def _handle_lead(q):
     db.record_lead_outcome(int(oid), action, user.id if user else 0, uname)
     label = _LEAD_ACTIONS.get(action, action)
     stamp = reports.jalali_str(clock.tehran_now())
-    base = (q.message.text or "").split("\n📌 ")[0]
+    text = q.message.text or ""
+    base = text.split("\n📌 ")[0]
+    m = re.search(r"📱\s*(\S+)", text)
+    phone = m.group(1) if m else None
     try:
-        await q.edit_message_text(f"{base}\n📌 {label} — {uname} • {stamp}", reply_markup=_lead_kb(oid))
+        await q.edit_message_text(f"{base}\n📌 {label} — {uname} • {stamp}", reply_markup=_lead_kb(oid, phone))
     except Exception:
         pass
     await q.answer("ثبت شد ✅")
@@ -243,7 +262,7 @@ async def push_leads(app, days, statuses):
         if db.lead_sent(o.get("id")):
             continue
         try:
-            await app.bot.send_message(group, text=reports.lead_text(o), reply_markup=_lead_kb(o.get("id")))
+            await app.bot.send_message(group, text=reports.lead_text(o), reply_markup=_lead_kb(o.get("id"), (o.get("billing") or {}).get("phone")))
             db.mark_lead(o.get("id"))
             sent += 1
         except Exception:

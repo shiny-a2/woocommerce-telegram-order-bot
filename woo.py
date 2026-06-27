@@ -63,7 +63,7 @@ async def get_notes(order_id: int):
 async def list_recent_orders(per_page=20):
     # فقط شناسه و وضعیت لازم است (پردازشِ کامل جداگانه get_order می‌کند) → سبک و سریع
     return await get(
-        "orders", {"per_page": per_page, "orderby": "id", "order": "desc", "_fields": "id,status"}
+        "orders", {"per_page": per_page, "orderby": "id", "order": "desc", "_fields": "id,status,date_created"}
     )
 
 

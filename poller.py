@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import time
 
 import clock
@@ -14,6 +15,39 @@ import pipeline
 import reports
 import telegram_io
 import woo
+
+# ساعت کاری تهران برای ارسال لحظه‌ایِ لیدها (۱۰ تا قبل از ۱۹)
+_BIZ_START, _BIZ_END = 10, 19
+_RT_WINDOW = datetime.timedelta(hours=12)  # فقط ناموفق/لغوِ تازه (نه بک‌لاگِ قدیمی هنگام ری‌استارت)
+
+
+def _recent(date_created):
+    if not date_created:
+        return True
+    try:
+        return (clock.tehran_now() - datetime.datetime.fromisoformat(date_created)) <= _RT_WINDOW
+    except Exception:
+        return True
+
+
+async def _push_one_lead(app, oid):
+    """یک سفارش ناموفق/لغو را همان لحظه با دکمه‌ها به گروه پیگیری می‌فرستد."""
+    if not telegram_io._followup_group():
+        return
+    try:
+        o = await woo.get(f"orders/{oid}", {"_fields": "id,number,total,status,billing,line_items,date_created"})
+    except Exception as e:
+        print(f"[leads] گرفتن سفارش {oid}: {e}")
+        return
+    try:
+        phone = (o.get("billing") or {}).get("phone")
+        await app.bot.send_message(
+            telegram_io._followup_group(), text=reports.lead_text(o), reply_markup=telegram_io._lead_kb(oid, phone)
+        )
+        db.mark_lead(oid)
+        print(f"[leads] لیدِ {o.get('status')} #{oid} لحظه‌ای ارسال شد.")
+    except Exception as e:
+        print(f"[leads] ارسال لیدِ {oid}: {e}")
 
 
 async def _maybe_daily(app):
@@ -57,15 +91,20 @@ async def _poll_orders(app):
     except Exception as e:
         print(f"[poller] گرفتن سفارش‌ها شکست خورد: {e}")
         return
+    biz = _BIZ_START <= clock.tehran_now().hour < _BIZ_END
     for o in reversed(orders):  # قدیمی‌تر اول
         oid = o.get("id")
         if not oid or oid <= baseline:  # سفارش‌های قدیمی‌تر از خط مبنا هرگز پست نمی‌شوند
             continue
-        if not db.is_posted(oid):
+        status = o.get("status")
+        if status in config.POST_STATUSES and not db.is_posted(oid):  # پیش‌فیلتر → بدون فچِ الکی
             try:
                 await pipeline.process_order(app, oid)
             except Exception as e:
                 print(f"[poller] پردازش سفارش {oid} شکست خورد: {e}")
+        # لیدِ لحظه‌ای: ناموفق/لغو در ساعت کاری → گروه پیگیری
+        if biz and status in ("failed", "cancelled") and _recent(o.get("date_created")) and not db.lead_sent(oid):
+            await _push_one_lead(app, oid)
 
 
 async def _poll_edits(app):
