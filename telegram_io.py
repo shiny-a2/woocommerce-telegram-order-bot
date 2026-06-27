@@ -141,6 +141,7 @@ def _authorized(update: Update) -> bool:
 
 def _main_menu():
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📋 خلاصه‌ی مدیریتی (این ماه)", callback_data="rep:overview")],
         [InlineKeyboardButton("📊 فروش امروز", callback_data="rep:today"),
          InlineKeyboardButton("📅 این هفته", callback_data="rep:week")],
         [InlineKeyboardButton("🗓️ این ماه", callback_data="rep:month"),
@@ -155,10 +156,13 @@ def _main_menu():
 
 def _analytics_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 مقایسه با ماه قبل", callback_data="rep:compare")],
-        [InlineKeyboardButton("🏆 پرفروش‌ترین محصولات", callback_data="rep:topproducts")],
-        [InlineKeyboardButton("🧮 آمار کلی (این ماه)", callback_data="rep:stats")],
-        [InlineKeyboardButton("🗺️ تفکیک استان (این ماه)", callback_data="rep:province")],
+        [InlineKeyboardButton("📈 روند ۶ ماه اخیر", callback_data="rep:trend"),
+         InlineKeyboardButton("🏦 عملکرد درگاه‌ها", callback_data="rep:gwperf")],
+        [InlineKeyboardButton("🏆 پرفروش‌ترین محصولات", callback_data="rep:topproducts"),
+         InlineKeyboardButton("👤 بهترین مشتری‌ها", callback_data="rep:customers")],
+        [InlineKeyboardButton("📊 مقایسه با ماه قبل", callback_data="rep:compare"),
+         InlineKeyboardButton("🧮 آمار کلی", callback_data="rep:stats")],
+        [InlineKeyboardButton("🗺️ تفکیک استان", callback_data="rep:province")],
         [InlineKeyboardButton("🔙 منو", callback_data="menu:main")],
     ])
 
@@ -230,6 +234,20 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data == "rep:province":
             await q.edit_message_text(
                 await reports.report_by_province(reports.current_jyear(), reports.current_jmonth()),
+                reply_markup=_back_kb())
+        elif data == "rep:overview":
+            await q.edit_message_text(
+                await reports.report_overview(reports.current_jyear(), reports.current_jmonth()),
+                reply_markup=_back_kb())
+        elif data == "rep:trend":
+            await q.edit_message_text(await reports.report_trend(6), reply_markup=_back_kb())
+        elif data == "rep:customers":
+            await q.edit_message_text(
+                await reports.report_top_customers(reports.current_jyear(), reports.current_jmonth()),
+                reply_markup=_back_kb())
+        elif data == "rep:gwperf":
+            await q.edit_message_text(
+                await reports.report_gateway_performance(reports.current_jyear(), reports.current_jmonth()),
                 reply_markup=_back_kb())
         elif data == "rep:pending":
             await q.edit_message_text(await reports.report_pending(), reply_markup=_back_kb())

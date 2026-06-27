@@ -322,3 +322,114 @@ async def daily_summary_text():
     label = f"{J_MONTHS[yj.month - 1]} {yj.day}، {yj.year}"
     body = _format_report(label, *(await _aggregate(start, end)))
     return "🌅 خلاصه‌ی فروش دیروز\n\n" + body
+
+
+# ---------- گزارش‌های مدیریتی ----------
+
+def _order_total(o):
+    return float(o.get("total") or 0)
+
+
+def _province_of(o):
+    b = o.get("billing", {}) or {}
+    sh = o.get("shipping", {}) or {}
+    code = (sh.get("state") if sh.get("address_1") else b.get("state")) or ""
+    return woo.state_name(code) or "نامشخص"
+
+
+async def report_overview(jy, jm):
+    """خلاصه‌ی مدیریتیِ یک ماه: فروش، تعداد، میانگین، نرخ لغو، و رتبه‌های برتر."""
+    s, e = _jmonth_range(jy, jm)
+    orders = await _orders_raw(s, e)
+    paid = [o for o in orders if _is_paid(o)]
+    total = sum(_order_total(o) for o in paid)
+    count = len(paid)
+    aov = total / count if count else 0
+    bad = sum(1 for o in orders if o.get("status") in ("cancelled", "refunded", "failed"))
+    rate = bad / len(orders) * 100 if orders else 0
+
+    gw, prod, prov = {}, {}, {}
+    for o in paid:
+        gw[o.get("payment_method_title") or "نامشخص"] = gw.get(o.get("payment_method_title") or "نامشخص", 0.0) + _order_total(o)
+        prov[_province_of(o)] = prov.get(_province_of(o), 0.0) + _order_total(o)
+        for li in o.get("line_items", []):
+            nm = li.get("name") or "؟"
+            prod[nm] = prod.get(nm, 0.0) + float(li.get("total") or 0)
+
+    def _top(d, fallback="—"):
+        if not d:
+            return fallback
+        k, v = max(d.items(), key=lambda x: x[1])
+        return f"{k} ({fmt_money(v)})"
+
+    return "\n".join([
+        f"📋 خلاصه‌ی مدیریتی — {J_MONTHS[jm - 1]} {jy}",
+        "",
+        f"💰 فروش کل: {fmt_money(total)} {config.CURRENCY_LABEL}",
+        f"🧾 سفارش موفق: {count}  •  میانگین: {fmt_money(aov)} {config.CURRENCY_LABEL}",
+        f"❌ نرخ لغو/ناموفق: {rate:.0f}٪",
+        "",
+        f"🏆 پرفروش‌ترین: {_top(prod)}",
+        f"🏦 درگاه برتر: {_top(gw)}",
+        f"🗺️ استان برتر: {_top(prov)}",
+    ])
+
+
+async def report_trend(months=6):
+    """روند فروشِ چند ماه اخیر."""
+    jt = _jtoday()
+    jy, jm = jt.year, jt.month
+    rows = []
+    for _ in range(months):
+        total, count = _sum_paid(await _orders_raw(*_jmonth_range(jy, jm)))
+        rows.append((f"{J_MONTHS[jm - 1]} {jy}", total, count))
+        jy, jm = _prev_jmonth(jy, jm)
+    rows.reverse()
+    lines = [f"📈 روند فروش ({months} ماه اخیر)", ""]
+    for label, total, count in rows:
+        lines.append(f"• {label}: {fmt_money(total)} {config.CURRENCY_LABEL} ({count} سفارش)")
+    return "\n".join(lines)
+
+
+async def report_top_customers(jy, jm, limit=10):
+    s, e = _jmonth_range(jy, jm)
+    agg = {}  # phone -> [name, total, count]
+    for o in await _orders_raw(s, e):
+        if not _is_paid(o):
+            continue
+        b = o.get("billing", {}) or {}
+        phone = b.get("phone") or "—"
+        name = f"{b.get('first_name', '')} {b.get('last_name', '')}".strip() or "—"
+        a = agg.setdefault(phone, [name, 0.0, 0])
+        a[1] += _order_total(o)
+        a[2] += 1
+    top = sorted(agg.items(), key=lambda x: -x[1][1])[:limit]
+    lines = [f"👤 بهترین مشتری‌ها — {J_MONTHS[jm - 1]} {jy}", ""]
+    for i, (phone, (name, total, count)) in enumerate(top, 1):
+        lines.append(f"{i}. {name} ({phone}) — {fmt_money(total)} {config.CURRENCY_LABEL}، {count} سفارش")
+    if not top:
+        lines.append("— موردی نبود —")
+    return "\n".join(lines)
+
+
+async def report_gateway_performance(jy, jm):
+    """عملکرد هر درگاه: تعداد و مبلغ موفق، تعداد ناموفق، نرخ موفقیت."""
+    s, e = _jmonth_range(jy, jm)
+    agg = {}  # gw -> [paid_count, paid_total, failed_count]
+    for o in await _orders_raw(s, e):
+        gw = o.get("payment_method_title") or "نامشخص"
+        a = agg.setdefault(gw, [0, 0.0, 0])
+        if _is_paid(o):
+            a[0] += 1
+            a[1] += _order_total(o)
+        elif o.get("status") in ("cancelled", "refunded", "failed"):
+            a[2] += 1
+    rows = sorted(agg.items(), key=lambda x: -x[1][1])
+    lines = [f"🏦 عملکرد درگاه‌ها — {J_MONTHS[jm - 1]} {jy}", ""]
+    for gw, (pc, pt, fc) in rows:
+        sr = pc / (pc + fc) * 100 if (pc + fc) else 0
+        lines.append(f"• {gw}")
+        lines.append(f"   موفق {pc} ({fmt_money(pt)} {config.CURRENCY_LABEL}) | ناموفق {fc} | نرخ موفقیت {sr:.0f}٪")
+    if not rows:
+        lines.append("— موردی نبود —")
+    return "\n".join(lines)
