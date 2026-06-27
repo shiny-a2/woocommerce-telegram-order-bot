@@ -106,13 +106,20 @@ async def _aggregate(start_dt, end_dt):
 
 
 def _format_report(label, by_gw, total, count):
-    lines = [f"📊 گزارش فروش — {label}", f"🧾 تعداد سفارش: {count}", "", "به تفکیک درگاه:"]
+    aov = total / count if count else 0
+    lines = [
+        f"📊 گزارش فروش — {label}",
+        "",
+        f"💰 فروش کل: {fmt_money(total)} {config.CURRENCY_LABEL}",
+        f"🧾 سفارش موفق: {count}  •  میانگین: {fmt_money(aov)} {config.CURRENCY_LABEL}",
+        "",
+        "به تفکیک درگاه:",
+    ]
     for gw, amt in sorted(by_gw.items(), key=lambda x: -x[1]):
-        lines.append(f"• {gw}: {fmt_money(amt)} {config.CURRENCY_LABEL}")
+        pct = amt / total * 100 if total else 0
+        lines.append(f"• {gw}: {fmt_money(amt)} {config.CURRENCY_LABEL} ({pct:.0f}٪)")
     if not by_gw:
         lines.append("— سفارشی در این بازه نبود —")
-    lines.append("")
-    lines.append(f"💰 جمع کل: {fmt_money(total)} {config.CURRENCY_LABEL}")
     return "\n".join(lines)
 
 
@@ -216,10 +223,12 @@ async def report_top_products(jy, jm, limit=10):
             a = agg.setdefault(nm, [0, 0.0])
             a[0] += li.get("quantity") or 0
             a[1] += float(li.get("total") or 0)
+    grand = sum(v[1] for v in agg.values()) or 1
     top = sorted(agg.items(), key=lambda x: -x[1][1])[:limit]
     lines = [f"🏆 پرفروش‌ترین محصولات — {J_MONTHS[jm - 1]} {jy}", ""]
     for i, (nm, (q, rev)) in enumerate(top, 1):
-        lines.append(f"{i}. {nm} — {int(q)} عدد، {fmt_money(rev)} {config.CURRENCY_LABEL}")
+        lines.append(f"{i}. {nm}")
+        lines.append(f"   {int(q)} عدد • {fmt_money(rev)} {config.CURRENCY_LABEL} ({rev / grand * 100:.0f}٪ فروش)")
     if not top:
         lines.append("— موردی نبود —")
     return "\n".join(lines)
@@ -233,13 +242,16 @@ async def report_stats(jy, jm):
     failed = sum(1 for o in orders if o.get("status") == "failed")
     cancelled = sum(1 for o in orders if o.get("status") == "cancelled")
     refunded = sum(1 for o in orders if o.get("status") == "refunded")
+    customers = len({o.get("billing", {}).get("phone") for o in orders if _is_paid(o) and o.get("billing", {}).get("phone")})
+    abandon = failed / (paid_count + failed) * 100 if (paid_count + failed) else 0
     return "\n".join([
         f"🧮 آمار کلی — {J_MONTHS[jm - 1]} {jy}",
         "",
-        f"🧾 سفارش موفق: {paid_count}",
         f"💰 فروش کل: {fmt_money(paid_total)} {config.CURRENCY_LABEL}",
-        f"📊 میانگین هر سفارش: {fmt_money(aov)} {config.CURRENCY_LABEL}",
-        f"🚫 رهاشده (پرداخت‌نشده): {failed}",
+        f"🧾 سفارش موفق: {paid_count}  •  میانگین: {fmt_money(aov)} {config.CURRENCY_LABEL}",
+        f"👥 مشتری یکتا: {customers}",
+        "",
+        f"🚫 رهاشده: {failed} ({abandon:.0f}٪ از تلاش‌های پرداخت)",
         f"❌ لغوشده: {cancelled}",
         f"↩️ مرجوع‌شده: {refunded}",
     ])
@@ -247,19 +259,18 @@ async def report_stats(jy, jm):
 
 async def report_by_province(jy, jm):
     s, e = _jmonth_range(jy, jm)
-    agg = {}
+    agg = {}  # name -> [total, count]
     for o in await _orders_raw(s, e):
         if not _is_paid(o):
             continue
-        b = o.get("billing", {}) or {}
-        sh = o.get("shipping", {}) or {}
-        code = (sh.get("state") if sh.get("address_1") else b.get("state")) or ""
-        name = woo.state_name(code) or "نامشخص"
-        agg[name] = agg.get(name, 0.0) + float(o.get("total") or 0)
-    top = sorted(agg.items(), key=lambda x: -x[1])
+        a = agg.setdefault(_province_of(o), [0.0, 0])
+        a[0] += _order_total(o)
+        a[1] += 1
+    grand = sum(v[0] for v in agg.values()) or 1
+    top = sorted(agg.items(), key=lambda x: -x[1][0])
     lines = [f"🗺️ فروش به تفکیک استان — {J_MONTHS[jm - 1]} {jy}", ""]
-    for nm, amt in top[:15]:
-        lines.append(f"• {nm}: {fmt_money(amt)} {config.CURRENCY_LABEL}")
+    for nm, (amt, cnt) in top[:15]:
+        lines.append(f"• {nm}: {fmt_money(amt)} {config.CURRENCY_LABEL} ({amt / grand * 100:.0f}٪) — {cnt} سفارش")
     if not top:
         lines.append("— موردی نبود —")
     return "\n".join(lines)
@@ -269,10 +280,15 @@ async def report_pending():
     orders = await woo.get(
         "orders", {"status": "processing", "per_page": 50, "orderby": "date", "order": "asc"}
     )
-    lines = [f"📦 در انتظار ارسال (در حال انجام): {len(orders)}", ""]
+    total = sum(float(o.get("total") or 0) for o in orders)
+    lines = [
+        f"📦 در انتظار ارسال: {len(orders)} سفارش • ارزش {fmt_money(total)} {config.CURRENCY_LABEL}",
+        "",
+    ]
     for o in orders[:40]:
-        f = caption_fields_brief(o)
-        lines.append(f"#{f[0]} — {f[1]} — {fmt_money(f[2])} {config.CURRENCY_LABEL}")
+        num, name, amt = caption_fields_brief(o)
+        jd = jalali_str(o["date_created"]).split()[0] if o.get("date_created") else ""
+        lines.append(f"#{num} — {name} — {fmt_money(amt)} ت — {jd}")
     if not orders:
         lines.append("— موردی نیست —")
     return "\n".join(lines)
@@ -349,6 +365,24 @@ async def report_overview(jy, jm):
     aov = total / count if count else 0
     failed = sum(1 for o in orders if o.get("status") == "failed")
     cancelled = sum(1 for o in orders if o.get("status") == "cancelled")
+    customers = len({o.get("billing", {}).get("phone") for o in paid if o.get("billing", {}).get("phone")})
+
+    pjy, pjm = _prev_jmonth(jy, jm)
+    jt = _jtoday()
+    if (jy, jm) == (jt.year, jt.month):  # ماه جاری: مقایسه‌ی هم‌بازه
+        pday = min(jt.day, _jmonth_len(pjy, pjm))
+        ps = jdatetime.date(pjy, pjm, 1).togregorian()
+        pe = jdatetime.date(pjy, pjm, pday).togregorian()
+        prev_total, _ = _sum_paid(await _orders_raw(
+            datetime.datetime(ps.year, ps.month, ps.day),
+            datetime.datetime(pe.year, pe.month, pe.day, 23, 59, 59)))
+    else:
+        prev_total, _ = _sum_paid(await _orders_raw(*_jmonth_range(pjy, pjm)))
+    if prev_total:
+        g = (total - prev_total) / prev_total * 100
+        growth = f"{'🟢 +' if g >= 0 else '🔴 '}{g:.0f}٪ نسبت به {J_MONTHS[pjm - 1]}"
+    else:
+        growth = "—"
 
     gw, prod, prov = {}, {}, {}
     for o in paid:
@@ -368,8 +402,10 @@ async def report_overview(jy, jm):
         f"📋 خلاصه‌ی مدیریتی — {J_MONTHS[jm - 1]} {jy}",
         "",
         f"💰 فروش کل: {fmt_money(total)} {config.CURRENCY_LABEL}",
+        f"📈 رشد: {growth}",
         f"🧾 سفارش موفق: {count}  •  میانگین: {fmt_money(aov)} {config.CURRENCY_LABEL}",
-        f"🚫 رهاشده (پرداخت‌نشده): {failed}  •  ❌ لغوشده: {cancelled}",
+        f"👥 مشتری یکتا: {customers}",
+        f"🚫 رهاشده: {failed}  •  ❌ لغوشده: {cancelled}",
         "",
         f"🏆 پرفروش‌ترین: {_top(prod)}",
         f"🏦 درگاه برتر: {_top(gw)}",
@@ -387,9 +423,18 @@ async def report_trend(months=6):
         rows.append((f"{J_MONTHS[jm - 1]} {jy}", total, count))
         jy, jm = _prev_jmonth(jy, jm)
     rows.reverse()
+    mx = max((t for _, t, _ in rows), default=0) or 1
     lines = [f"📈 روند فروش ({months} ماه اخیر)", ""]
+    prev = None
     for label, total, count in rows:
-        lines.append(f"• {label}: {fmt_money(total)} {config.CURRENCY_LABEL} ({count} سفارش)")
+        bar = "▰" * round(total / mx * 10) or "▱"
+        growth = ""
+        if prev:
+            g = (total - prev) / prev * 100
+            growth = f"  ({'+' if g >= 0 else ''}{g:.0f}٪)"
+        lines.append(f"{label}{growth}")
+        lines.append(f"  {bar} {fmt_money(total)} ت • {count} سفارش")
+        prev = total
     return "\n".join(lines)
 
 
@@ -402,13 +447,14 @@ async def report_top_customers(jy, jm, limit=10):
         b = o.get("billing", {}) or {}
         phone = b.get("phone") or "—"
         name = f"{b.get('first_name', '')} {b.get('last_name', '')}".strip() or "—"
-        a = agg.setdefault(phone, [name, 0.0, 0])
+        a = agg.setdefault(phone, [name, 0.0, 0, _province_of(o)])
         a[1] += _order_total(o)
         a[2] += 1
     top = sorted(agg.items(), key=lambda x: -x[1][1])[:limit]
     lines = [f"👤 بهترین مشتری‌ها — {J_MONTHS[jm - 1]} {jy}", ""]
-    for i, (phone, (name, total, count)) in enumerate(top, 1):
-        lines.append(f"{i}. {name} ({phone}) — {fmt_money(total)} {config.CURRENCY_LABEL}، {count} سفارش")
+    for i, (phone, (name, total, count, prov)) in enumerate(top, 1):
+        lines.append(f"{i}. {name} — {prov}")
+        lines.append(f"   📞 {phone} • {fmt_money(total)} {config.CURRENCY_LABEL} • {count} سفارش")
     if not top:
         lines.append("— موردی نبود —")
     return "\n".join(lines)
@@ -426,12 +472,14 @@ async def report_gateway_performance(jy, jm):
             a[1] += _order_total(o)
         elif o.get("status") == "failed":  # رهاشده/پرداخت‌نشده (لغو جداست)
             a[2] += 1
+    grand = sum(v[1] for v in agg.values()) or 1
     rows = sorted(agg.items(), key=lambda x: -x[1][1])
     lines = [f"🏦 عملکرد درگاه‌ها — {J_MONTHS[jm - 1]} {jy}", ""]
     for gw, (pc, pt, fc) in rows:
         sr = pc / (pc + fc) * 100 if (pc + fc) else 0
-        lines.append(f"• {gw}")
-        lines.append(f"   موفق {pc} ({fmt_money(pt)} {config.CURRENCY_LABEL}) | رهاشده {fc} | نرخ موفقیت {sr:.0f}٪")
+        aov = pt / pc if pc else 0
+        lines.append(f"• {gw} — سهم {pt / grand * 100:.0f}٪")
+        lines.append(f"   موفق {pc} ({fmt_money(pt)} ت) | رهاشده {fc} | موفقیت {sr:.0f}٪ | میانگین {fmt_money(aov)} ت")
     if not rows:
         lines.append("— موردی نبود —")
     return "\n".join(lines)
