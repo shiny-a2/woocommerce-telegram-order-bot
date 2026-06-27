@@ -13,6 +13,7 @@ import time
 
 from telegram.ext import Application
 
+import clock
 import config
 import db
 import poller
@@ -34,7 +35,7 @@ class _Stamped:
     def write(self, text):
         if not text:
             return
-        ts = (datetime.datetime.utcnow() + _TEHRAN).strftime("%m-%d %H:%M:%S")
+        ts = clock.tehran_now().strftime("%m-%d %H:%M:%S")
         out = []
         for piece in text.splitlines(keepends=True):
             if self._line_start:
@@ -126,6 +127,7 @@ async def _on_error(update, context):
 if __name__ == "__main__":
     _setup_logging()
     os.chdir(_HERE)
+    clock.refresh_sync()  # آفست ساعت را قبل از هر چیز بگیر
     print("[boot] راه‌اندازی سرویس…")
     while True:
         try:

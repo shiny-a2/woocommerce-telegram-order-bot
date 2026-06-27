@@ -5,21 +5,18 @@
 from __future__ import annotations
 
 import asyncio
-import datetime
 import time
 
+import clock
 import config
 import db
 import pipeline
 import reports
 import woo
 
-# خلاصه‌ی روزانه راس نیمه‌شب تهران (UTC+3:30، بدون DST)
-_TEHRAN_OFFSET = datetime.timedelta(hours=3, minutes=30)
-
 
 async def _maybe_daily(app):
-    now = datetime.datetime.utcnow() + _TEHRAN_OFFSET
+    now = clock.tehran_now()
     if now.hour != 0:  # فقط راس نیمه‌شب تهران (۰۰:۰۰–۰۰:۵۹)
         return
     today = now.strftime("%Y-%m-%d")
@@ -64,8 +61,12 @@ async def _poll_edits(app):
 
 async def run(app):
     print(f"[poller] شروع شد، هر {config.POLL_INTERVAL_SECONDS} ثانیه.")
+    cycle = 0
     while True:
+        if cycle % 120 == 0:  # هر ~۲ ساعت ساعت را با منبع بیرونی همگام کن
+            await clock.refresh()
         await _poll_orders(app)
         await _poll_edits(app)
         await _maybe_daily(app)
+        cycle += 1
         await asyncio.sleep(config.POLL_INTERVAL_SECONDS)

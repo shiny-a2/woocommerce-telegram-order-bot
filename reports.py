@@ -5,6 +5,7 @@ import datetime
 
 import jdatetime
 
+import clock
 import config
 import woo
 
@@ -18,8 +19,17 @@ J_MONTHS = [
 ]
 
 
+def _now():
+    """زمانِ واقعیِ تهران (مستقل از ساعتِ سرور)."""
+    return clock.tehran_now()
+
+
+def _jtoday():
+    return jdatetime.date.fromgregorian(date=_now().date())
+
+
 def current_jyear() -> int:
-    return jdatetime.date.today().year
+    return _jtoday().year
 
 
 def _norm_digits(s: str) -> str:
@@ -42,20 +52,20 @@ def jalali_str(iso_or_dt):
 
 
 def _range_today():
-    g = jdatetime.date.today().togregorian()
-    return datetime.datetime(g.year, g.month, g.day), datetime.datetime.now(), "امروز"
+    g = _jtoday().togregorian()
+    return datetime.datetime(g.year, g.month, g.day), _now(), "امروز"
 
 
 def _range_week():
-    jd = jdatetime.date.today()
+    jd = _jtoday()
     start = (jd - datetime.timedelta(days=jd.weekday())).togregorian()  # شنبه=۰
-    return datetime.datetime(start.year, start.month, start.day), datetime.datetime.now(), "این هفته"
+    return datetime.datetime(start.year, start.month, start.day), _now(), "این هفته"
 
 
 def _range_month():
-    jd = jdatetime.date.today()
+    jd = _jtoday()
     g = jdatetime.date(jd.year, jd.month, 1).togregorian()
-    return datetime.datetime(g.year, g.month, g.day), datetime.datetime.now(), f"{J_MONTHS[jd.month - 1]} {jd.year}"
+    return datetime.datetime(g.year, g.month, g.day), _now(), f"{J_MONTHS[jd.month - 1]} {jd.year}"
 
 
 def _parse_jdate(s: str):
@@ -68,7 +78,7 @@ def _jmonth_range(jy, jm):
     nxt = (jdatetime.date(jy, jm + 1, 1) if jm < 12 else jdatetime.date(jy + 1, 1, 1)).togregorian()
     s = datetime.datetime(start.year, start.month, start.day)
     e = datetime.datetime(nxt.year, nxt.month, nxt.day)
-    return s, min(e, datetime.datetime.now())
+    return s, min(e, _now())
 
 
 def _jyear_range(jy):
@@ -76,7 +86,7 @@ def _jyear_range(jy):
     nxt = jdatetime.date(jy + 1, 1, 1).togregorian()
     s = datetime.datetime(start.year, start.month, start.day)
     e = datetime.datetime(nxt.year, nxt.month, nxt.day)
-    return s, min(e, datetime.datetime.now())
+    return s, min(e, _now())
 
 
 async def _aggregate(start_dt, end_dt):
@@ -133,7 +143,7 @@ async def report_jyear(jy):
 
 
 def current_jmonth() -> int:
-    return jdatetime.date.today().month
+    return _jtoday().month
 
 
 # ---------- آمار و تحلیل ----------
@@ -167,10 +177,10 @@ def _jmonth_len(jy, jm):
 
 async def report_compare():
     """مقایسه‌ی ماه جاری (تا امروز) با همان بازه از ماه قبل."""
-    jt = jdatetime.date.today()
+    jt = _jtoday()
     cs = jdatetime.date(jt.year, jt.month, 1).togregorian()
     cur_total, cur_count = _sum_paid(await _orders_raw(
-        datetime.datetime(cs.year, cs.month, cs.day), datetime.datetime.now()))
+        datetime.datetime(cs.year, cs.month, cs.day), _now()))
 
     pjy, pjm = _prev_jmonth(jt.year, jt.month)
     pday = min(jt.day, _jmonth_len(pjy, pjm))
@@ -299,12 +309,8 @@ async def orders_csv(jy, jm):
     return buf.getvalue()
 
 
-# تهران بدون DST: همیشه UTC+3:30
-_TEHRAN_OFFSET = datetime.timedelta(hours=3, minutes=30)
-
-
 def tehran_now():
-    return datetime.datetime.utcnow() + _TEHRAN_OFFSET
+    return clock.tehran_now()
 
 
 async def daily_summary_text():
