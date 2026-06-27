@@ -1,11 +1,12 @@
 """نقطه‌ی ورود: ربات تلگرام + پولینگ (+ وب‌هوک اختیاری) در یک لوپ.
 
-با خودترمیمی: اگر اجرای اصلی به هر دلیل بیفتد، خودش پس از چند ثانیه دوباره بالا می‌آید.
-خروجی روی data/bot.log نوشته می‌شود (چون به‌صورت سرویس بدون کنسول اجرا می‌شود).
+خودترمیم: اگر اجرای اصلی به هر دلیلی بیفتد، خودش پس از چند ثانیه دوباره بالا می‌آید
+و هرگز خارج نمی‌شود. خروجی با تایم‌استمپِ تهران روی data/bot.log نوشته می‌شود.
 """
 from __future__ import annotations
 
 import asyncio
+import datetime
 import os
 import sys
 import time
@@ -20,6 +21,30 @@ import woo
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LOG = os.path.join(_HERE, "data", "bot.log")
+_TEHRAN = datetime.timedelta(hours=3, minutes=30)
+
+
+class _Stamped:
+    """هر خط خروجی را با زمانِ تهران برچسب می‌زند."""
+
+    def __init__(self, stream):
+        self._s = stream
+        self._line_start = True
+
+    def write(self, text):
+        if not text:
+            return
+        ts = (datetime.datetime.utcnow() + _TEHRAN).strftime("%m-%d %H:%M:%S")
+        out = []
+        for piece in text.splitlines(keepends=True):
+            if self._line_start:
+                out.append(f"[{ts}] ")
+            out.append(piece)
+            self._line_start = piece.endswith("\n")
+        self._s.write("".join(out))
+
+    def flush(self):
+        self._s.flush()
 
 
 def _setup_logging():
@@ -28,7 +53,7 @@ def _setup_logging():
         mode = "a"
         if os.path.exists(_LOG) and os.path.getsize(_LOG) > 2_000_000:
             mode = "w"  # چرخش ساده وقتی لاگ بزرگ شد
-        stream = open(_LOG, mode, encoding="utf-8", buffering=1)
+        stream = _Stamped(open(_LOG, mode, encoding="utf-8", buffering=1))
         sys.stdout = stream
         sys.stderr = stream
     except Exception:
@@ -36,8 +61,7 @@ def _setup_logging():
 
 
 async def _ensure_baseline():
-    """خط مبنا: فقط سفارش‌هایی با آیدیِ بزرگ‌تر از این مقدار پست می‌شوند؛ سفارش‌های
-    قدیمیِ موجود هرگز پست نمی‌شوند (جلوگیری از backfill/اسپم)."""
+    """خط مبنا: فقط سفارش‌هایی با آیدیِ بزرگ‌تر از این مقدار پست می‌شوند."""
     if db.get_meta("baseline_id") is not None:
         return
     try:
@@ -47,29 +71,30 @@ async def _ensure_baseline():
         print(f"[baseline] تعیین خط مبنا ناموفق بود: {e}")
         baseline = 0
     db.set_meta("baseline_id", baseline)
-    print(f"[baseline] خط مبنا روی {baseline} تنظیم شد؛ فقط سفارش‌های جدیدتر پست می‌شوند.")
+    print(f"[baseline] خط مبنا روی {baseline} تنظیم شد.")
 
 
 async def main():
     missing = [
-        k
-        for k, v in {
+        k for k, v in {
             "TELEGRAM_BOT_TOKEN": config.TELEGRAM_BOT_TOKEN,
             "TELEGRAM_GROUP_ID": config.TELEGRAM_GROUP_ID,
             "WOO_URL": config.WOO_URL,
             "WOO_CK": config.WOO_CK,
             "WOO_CS": config.WOO_CS,
-        }.items()
-        if not v
+        }.items() if not v
     ]
-    if missing:
-        raise SystemExit("این متغیرها در .env تنظیم نشده‌اند: " + ", ".join(missing))
+    if missing:  # به‌جای خروج، تلاش مجدد (شاید .env موقتاً خوانده نشده)
+        print("[main] متغیرهای .env ناقص‌اند: " + ", ".join(missing))
+        await asyncio.sleep(10)
+        return
 
     db.init()
     await woo.load_states()
     await _ensure_baseline()
 
     app = Application.builder().token(config.TELEGRAM_BOT_TOKEN).build()
+    app.add_error_handler(_on_error)
     telegram_io.register_handlers(app)
 
     await app.initialize()
@@ -86,19 +111,30 @@ async def main():
     try:
         await asyncio.gather(*tasks)
     finally:
-        await app.updater.stop()
-        await app.stop()
-        await app.shutdown()
+        try:
+            await app.updater.stop()
+            await app.stop()
+            await app.shutdown()
+        except Exception:
+            pass
+
+
+async def _on_error(update, context):
+    print(f"[ptb-error] {context.error!r}")
 
 
 if __name__ == "__main__":
     _setup_logging()
     os.chdir(_HERE)
+    print("[boot] راه‌اندازی سرویس…")
     while True:
         try:
             asyncio.run(main())
         except KeyboardInterrupt:
             break
-        except Exception as e:
-            print(f"[fatal] خطای کلی: {e} — ۱۵ ثانیه دیگر تلاش مجدد", flush=True)
-            time.sleep(15)
+        except BaseException as e:  # هیچ خطایی نباید پراسس را بکُشد
+            print(f"[fatal] {e!r} — ۱۵ ثانیه دیگر تلاش مجدد")
+            try:
+                time.sleep(15)
+            except Exception:
+                pass
