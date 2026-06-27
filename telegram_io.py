@@ -229,6 +229,31 @@ async def _handle_lead(q):
     await q.answer("ثبت شد ✅")
 
 
+async def push_leads(app, days, statuses):
+    """لیدهای جدیدِ ناموفق/لغو را با دکمه‌های اقدام به گروه پیگیری می‌فرستد.
+
+    خروجی (sent, total) یا None اگر گروه پیگیری تنظیم نشده باشد.
+    """
+    group = _followup_group()
+    if not group:
+        return None
+    leads = await reports.fetch_leads(days, statuses)
+    sent = 0
+    for o in leads:
+        if db.lead_sent(o.get("id")):
+            continue
+        try:
+            await app.bot.send_message(group, text=reports.lead_text(o), reply_markup=_lead_kb(o.get("id")))
+            db.mark_lead(o.get("id"))
+            sent += 1
+        except Exception:
+            pass
+        await asyncio.sleep(0.4)
+        if sent >= 60:
+            break
+    return sent, len(leads)
+
+
 async def _outcomes_report():
     rows = db.outcomes_since(time.time() - 30 * 86400)
     counts = {"contacted": 0, "noanswer": 0, "bought": 0}
@@ -322,29 +347,16 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data == "rep:pending":
             await q.edit_message_text(await reports.report_pending(), reply_markup=_back_kb())
         elif data == "followup":
-            group = _followup_group()
-            if not group:
+            res = await push_leads(context.application, 7, ("failed",))
+            if res is None:
                 await q.edit_message_text(
                     "⚠️ گروه پیگیری تنظیم نشده.\nربات را در گروهِ پیگیری عضو کن و همان‌جا دستور /setfollowup را بفرست.",
                     reply_markup=_back_kb())
             else:
-                leads = await reports.abandoned_leads(7)
-                sent = 0
-                for o in leads:
-                    if db.lead_sent(o.get("id")):
-                        continue
-                    try:
-                        await context.bot.send_message(group, text=reports.lead_text(o), reply_markup=_lead_kb(o.get("id")))
-                        db.mark_lead(o.get("id"))
-                        sent += 1
-                    except Exception:
-                        pass
-                    await asyncio.sleep(0.4)
-                    if sent >= 50:
-                        break
+                sent, total = res
                 await q.edit_message_text(
-                    f"📞 {sent} لیدِ جدیدِ رهاشده به گروه پیگیری ارسال شد.\n"
-                    f"(از {len(leads)} موردِ ۷ روز اخیر؛ موارد قبلاً‌ارسال‌شده دوباره فرستاده نمی‌شوند.)",
+                    f"📞 {sent} لیدِ جدید به گروه پیگیری ارسال شد.\n"
+                    f"(از {total} موردِ ۷ روز اخیر؛ موارد قبلاً‌ارسال‌شده دوباره فرستاده نمی‌شوند.)",
                     reply_markup=_back_kb())
         elif data == "outcomes":
             await q.edit_message_text(await _outcomes_report(), reply_markup=_back_kb())

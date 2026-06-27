@@ -12,6 +12,7 @@ import config
 import db
 import pipeline
 import reports
+import telegram_io
 import woo
 
 
@@ -30,6 +31,23 @@ async def _maybe_daily(app):
         print("[daily] خلاصه‌ی فروش دیروز ارسال شد.")
     except Exception as e:
         print(f"[daily] ارسال خلاصه ناموفق بود: {e}")
+
+
+async def _maybe_leads(app):
+    """راس ۱۰ صبح تهران: ناموفق + لغوی‌های ۲۴ ساعت اخیر را به گروه پیگیری بفرست."""
+    now = clock.tehran_now()
+    if now.hour != 10:
+        return
+    today = now.strftime("%Y-%m-%d")
+    if db.get_meta("last_leads") == today:
+        return
+    try:
+        res = await telegram_io.push_leads(app, 1, ("failed", "cancelled"))
+        if res is not None:
+            db.set_meta("last_leads", today)
+            print(f"[leads] {res[0]} لیدِ ناموفق/لغوِ ۲۴ ساعت اخیر به گروه پیگیری ارسال شد.")
+    except Exception as e:
+        print(f"[leads] ارسال لیدها ناموفق بود: {e}")
 
 
 async def _poll_orders(app):
@@ -68,5 +86,6 @@ async def run(app):
         await _poll_orders(app)
         await _poll_edits(app)
         await _maybe_daily(app)
+        await _maybe_leads(app)
         cycle += 1
         await asyncio.sleep(config.POLL_INTERVAL_SECONDS)

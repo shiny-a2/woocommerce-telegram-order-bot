@@ -503,17 +503,26 @@ async def report_gateway_performance(jy, jm):
 
 # ---------- لیدهای رهاشده (برای پیگیریِ تلفنی) ----------
 
-async def abandoned_leads(days=7):
-    """سفارش‌های رهاشده (failed) چند روز اخیر برای پیگیری."""
+async def fetch_leads(days=7, statuses=("failed",)):
+    """سفارش‌های ناموفق/لغوِ چند روز اخیر برای پیگیری (یکتا بر اساس آیدی)."""
     start = clock.tehran_now() - datetime.timedelta(days=days)
-    return await woo.get("orders", {
-        "status": "failed",
-        "after": start.isoformat(),
-        "per_page": 100,
-        "orderby": "date",
-        "order": "desc",
-        "_fields": "id,number,total,billing,line_items,date_created",
-    })
+    out = []
+    for st in statuses:
+        out += await woo.get("orders", {
+            "status": st,
+            "after": start.isoformat(),
+            "per_page": 100,
+            "orderby": "date",
+            "order": "desc",
+            "_fields": "id,number,total,status,billing,line_items,date_created",
+        })
+    seen, res = set(), []
+    for o in sorted(out, key=lambda x: x.get("id", 0), reverse=True):
+        if o.get("id") in seen:
+            continue
+        seen.add(o.get("id"))
+        res.append(o)
+    return res
 
 
 def lead_text(o):
@@ -521,8 +530,9 @@ def lead_text(o):
     name = f"{b.get('first_name', '')} {b.get('last_name', '')}".strip() or "—"
     prods = "، ".join(li.get("name", "") for li in o.get("line_items", [])) or "—"
     jd = jalali_str(o["date_created"]).split()[0] if o.get("date_created") else ""
+    kind = "لغوشده" if o.get("status") == "cancelled" else "رهاشده (پرداخت‌نشده)"
     return "\n".join([
-        f"📞 پیگیری سفارش رهاشده — #{o.get('number') or o.get('id')}",
+        f"📞 پیگیری — {kind} — #{o.get('number') or o.get('id')}",
         f"👤 {name}",
         f"📱 {b.get('phone', '—')}",
         f"🛍️ {prods}",
