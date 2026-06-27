@@ -40,6 +40,16 @@ def init():
     )
     _conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
     _conn.execute("CREATE TABLE IF NOT EXISTS sent_leads (order_id INTEGER PRIMARY KEY)")
+    _conn.execute(
+        """CREATE TABLE IF NOT EXISTS lead_outcomes (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id  INTEGER,
+            action    TEXT,
+            user_id   INTEGER,
+            user_name TEXT,
+            ts        REAL
+        )"""
+    )
     _conn.commit()
 
 
@@ -52,6 +62,24 @@ def mark_lead(order_id):
     with _lock:
         _conn.execute("INSERT OR IGNORE INTO sent_leads(order_id) VALUES (?)", (order_id,))
         _conn.commit()
+
+
+def record_lead_outcome(order_id, action, user_id, user_name):
+    with _lock:
+        _conn.execute(
+            "INSERT INTO lead_outcomes(order_id, action, user_id, user_name, ts) VALUES (?,?,?,?,?)",
+            (order_id, action, user_id, user_name, time.time()),
+        )
+        _conn.commit()
+
+
+def outcomes_since(since_ts):
+    with _lock:
+        cur = _conn.execute(
+            "SELECT order_id, action, user_id, user_name, ts FROM lead_outcomes WHERE ts>=? ORDER BY ts DESC",
+            (since_ts,),
+        )
+        return cur.fetchall()
 
 
 def get_meta(key):

@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import html
 import io
+import time
 
 from telegram import (
     InlineKeyboardButton,
@@ -22,6 +23,7 @@ from telegram.ext import (
     filters,
 )
 
+import clock
 import config
 import db
 import reports
@@ -150,7 +152,8 @@ def _main_menu():
         [InlineKeyboardButton("📆 انتخاب ماه (به تفکیک درگاه)", callback_data="menu:months")],
         [InlineKeyboardButton("📈 آمار و تحلیل", callback_data="menu:analytics"),
          InlineKeyboardButton("📦 در انتظار ارسال", callback_data="rep:pending")],
-        [InlineKeyboardButton("📞 پیگیری رهاشده‌ها", callback_data="followup")],
+        [InlineKeyboardButton("📞 پیگیری رهاشده‌ها", callback_data="followup"),
+         InlineKeyboardButton("📊 نتایج پیگیری", callback_data="outcomes")],
         [InlineKeyboardButton("📄 خروجی اکسل (این ماه)", callback_data="csv:month")],
         [InlineKeyboardButton("🔍 جستجوی سفارش", callback_data="search")],
     ])
@@ -190,6 +193,68 @@ def _back_kb():
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 منو", callback_data="menu:main")]])
 
 
+# ---------- پیگیری رهاشده‌ها (دکمه‌های زیر هر لید) ----------
+
+_LEAD_ACTIONS = {"contacted": "📞 تماس شد", "noanswer": "🚫 پاسخ نداد", "bought": "✅ خرید کرد"}
+
+
+def _lead_kb(oid):
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton("📞 تماس شد", callback_data=f"lead:contacted:{oid}"),
+        InlineKeyboardButton("🚫 پاسخ نداد", callback_data=f"lead:noanswer:{oid}"),
+        InlineKeyboardButton("✅ خرید کرد", callback_data=f"lead:bought:{oid}"),
+    ]])
+
+
+def _followup_group():
+    return int(db.get_meta("followup_group") or config.FOLLOWUP_GROUP_ID or 0)
+
+
+async def _handle_lead(q):
+    try:
+        _, action, oid = q.data.split(":")
+    except ValueError:
+        await q.answer()
+        return
+    user = q.from_user
+    uname = (user.full_name if user else "") or (("@" + user.username) if (user and user.username) else str(user.id if user else 0))
+    db.record_lead_outcome(int(oid), action, user.id if user else 0, uname)
+    label = _LEAD_ACTIONS.get(action, action)
+    stamp = reports.jalali_str(clock.tehran_now())
+    base = (q.message.text or "").split("\n📌 ")[0]
+    try:
+        await q.edit_message_text(f"{base}\n📌 {label} — {uname} • {stamp}", reply_markup=_lead_kb(oid))
+    except Exception:
+        pass
+    await q.answer("ثبت شد ✅")
+
+
+async def _outcomes_report():
+    rows = db.outcomes_since(time.time() - 30 * 86400)
+    counts = {"contacted": 0, "noanswer": 0, "bought": 0}
+    by_user = {}
+    for _oid, action, _uid, uname, _ts in rows:
+        counts[action] = counts.get(action, 0) + 1
+        u = by_user.setdefault(uname or "—", {"total": 0, "bought": 0})
+        u["total"] += 1
+        if action == "bought":
+            u["bought"] += 1
+    lines = [
+        "📊 نتایج پیگیری (۳۰ روز اخیر)",
+        "",
+        f"📞 تماس شد: {counts['contacted']}",
+        f"🚫 پاسخ نداد: {counts['noanswer']}",
+        f"✅ خرید کرد: {counts['bought']}",
+    ]
+    if by_user:
+        lines += ["", "به تفکیک کارمند:"]
+        for u, d in sorted(by_user.items(), key=lambda x: -x[1]["total"]):
+            lines.append(f"• {u}: {d['total']} اقدام (✅ {d['bought']} خرید)")
+    else:
+        lines += ["", "— هنوز اقدامی ثبت نشده —"]
+    return "\n".join(lines)
+
+
 async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _authorized(update):
         return
@@ -201,11 +266,14 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     if not q:
         return
+    data = q.data or ""
+    if data.startswith("lead:"):  # دکمه‌های پیگیری در گروه — برای همه‌ی اعضای تیم
+        await _handle_lead(q)
+        return
     if not q.from_user or q.from_user.id not in config.ADMIN_USER_IDS:
         await q.answer("اجازه‌ی دسترسی ندارید.", show_alert=True)
         return
     await q.answer()
-    data = q.data or ""
     if data != "search":
         context.user_data["awaiting_search"] = False
     try:
@@ -254,9 +322,10 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif data == "rep:pending":
             await q.edit_message_text(await reports.report_pending(), reply_markup=_back_kb())
         elif data == "followup":
-            if not config.FOLLOWUP_GROUP_ID:
+            group = _followup_group()
+            if not group:
                 await q.edit_message_text(
-                    "⚠️ گروه پیگیری تنظیم نشده.\nربات را در گروهِ پیگیری عضو کن، بعد آیدی گروه را در .env جلوی FOLLOWUP_GROUP_ID بگذار.",
+                    "⚠️ گروه پیگیری تنظیم نشده.\nربات را در گروهِ پیگیری عضو کن و همان‌جا دستور /setfollowup را بفرست.",
                     reply_markup=_back_kb())
             else:
                 leads = await reports.abandoned_leads(7)
@@ -265,7 +334,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if db.lead_sent(o.get("id")):
                         continue
                     try:
-                        await context.bot.send_message(config.FOLLOWUP_GROUP_ID, text=reports.lead_text(o))
+                        await context.bot.send_message(group, text=reports.lead_text(o), reply_markup=_lead_kb(o.get("id")))
                         db.mark_lead(o.get("id"))
                         sent += 1
                     except Exception:
@@ -277,6 +346,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"📞 {sent} لیدِ جدیدِ رهاشده به گروه پیگیری ارسال شد.\n"
                     f"(از {len(leads)} موردِ ۷ روز اخیر؛ موارد قبلاً‌ارسال‌شده دوباره فرستاده نمی‌شوند.)",
                     reply_markup=_back_kb())
+        elif data == "outcomes":
+            await q.edit_message_text(await _outcomes_report(), reply_markup=_back_kb())
         elif data == "csv:month":
             jy, jm = reports.current_jyear(), reports.current_jmonth()
             data_bytes = (await reports.orders_csv(jy, jm)).encode("utf-8-sig")
@@ -348,10 +419,19 @@ async def cmd_range(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"خطا: {e}")
 
 
+async def cmd_setfollowup(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not _authorized(update):
+        return
+    chat = update.effective_chat
+    db.set_meta("followup_group", str(chat.id))
+    await update.message.reply_text(f"✅ این گروه به‌عنوان گروه پیگیری تنظیم شد (id={chat.id}).")
+
+
 def register_handlers(app: Application):
     app.add_handler(CommandHandler("start", cmd_menu))
     app.add_handler(CommandHandler("menu", cmd_menu))
     app.add_handler(CommandHandler("help", cmd_menu))
+    app.add_handler(CommandHandler("setfollowup", cmd_setfollowup))
     app.add_handler(CommandHandler("range", cmd_range))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.add_handler(CallbackQueryHandler(on_callback))
