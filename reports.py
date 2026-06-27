@@ -229,17 +229,19 @@ async def report_stats(jy, jm):
     s, e = _jmonth_range(jy, jm)
     orders = await _orders_raw(s, e)
     paid_total, paid_count = _sum_paid(orders)
-    all_count = len(orders)
-    bad = sum(1 for o in orders if o.get("status") in ("cancelled", "refunded", "failed"))
     aov = paid_total / paid_count if paid_count else 0
-    rate = bad / all_count * 100 if all_count else 0
+    failed = sum(1 for o in orders if o.get("status") == "failed")
+    cancelled = sum(1 for o in orders if o.get("status") == "cancelled")
+    refunded = sum(1 for o in orders if o.get("status") == "refunded")
     return "\n".join([
         f"🧮 آمار کلی — {J_MONTHS[jm - 1]} {jy}",
         "",
         f"🧾 سفارش موفق: {paid_count}",
         f"💰 فروش کل: {fmt_money(paid_total)} {config.CURRENCY_LABEL}",
         f"📊 میانگین هر سفارش: {fmt_money(aov)} {config.CURRENCY_LABEL}",
-        f"❌ لغو/مرجوع/ناموفق: {bad} ({rate:.0f}٪)",
+        f"🚫 رهاشده (پرداخت‌نشده): {failed}",
+        f"❌ لغوشده: {cancelled}",
+        f"↩️ مرجوع‌شده: {refunded}",
     ])
 
 
@@ -345,8 +347,8 @@ async def report_overview(jy, jm):
     total = sum(_order_total(o) for o in paid)
     count = len(paid)
     aov = total / count if count else 0
-    bad = sum(1 for o in orders if o.get("status") in ("cancelled", "refunded", "failed"))
-    rate = bad / len(orders) * 100 if orders else 0
+    failed = sum(1 for o in orders if o.get("status") == "failed")
+    cancelled = sum(1 for o in orders if o.get("status") == "cancelled")
 
     gw, prod, prov = {}, {}, {}
     for o in paid:
@@ -367,7 +369,7 @@ async def report_overview(jy, jm):
         "",
         f"💰 فروش کل: {fmt_money(total)} {config.CURRENCY_LABEL}",
         f"🧾 سفارش موفق: {count}  •  میانگین: {fmt_money(aov)} {config.CURRENCY_LABEL}",
-        f"❌ نرخ لغو/ناموفق: {rate:.0f}٪",
+        f"🚫 رهاشده (پرداخت‌نشده): {failed}  •  ❌ لغوشده: {cancelled}",
         "",
         f"🏆 پرفروش‌ترین: {_top(prod)}",
         f"🏦 درگاه برتر: {_top(gw)}",
@@ -422,14 +424,14 @@ async def report_gateway_performance(jy, jm):
         if _is_paid(o):
             a[0] += 1
             a[1] += _order_total(o)
-        elif o.get("status") in ("cancelled", "refunded", "failed"):
+        elif o.get("status") == "failed":  # رهاشده/پرداخت‌نشده (لغو جداست)
             a[2] += 1
     rows = sorted(agg.items(), key=lambda x: -x[1][1])
     lines = [f"🏦 عملکرد درگاه‌ها — {J_MONTHS[jm - 1]} {jy}", ""]
     for gw, (pc, pt, fc) in rows:
         sr = pc / (pc + fc) * 100 if (pc + fc) else 0
         lines.append(f"• {gw}")
-        lines.append(f"   موفق {pc} ({fmt_money(pt)} {config.CURRENCY_LABEL}) | ناموفق {fc} | نرخ موفقیت {sr:.0f}٪")
+        lines.append(f"   موفق {pc} ({fmt_money(pt)} {config.CURRENCY_LABEL}) | رهاشده {fc} | نرخ موفقیت {sr:.0f}٪")
     if not rows:
         lines.append("— موردی نبود —")
     return "\n".join(lines)
