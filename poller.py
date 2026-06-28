@@ -10,6 +10,7 @@ import time
 
 import clock
 import config
+import crm
 import db
 import pipeline
 import reports
@@ -19,6 +20,7 @@ import woo
 # ساعت کاری تهران برای ارسال لحظه‌ایِ لیدها (۱۰ تا قبل از ۱۹)
 _BIZ_START, _BIZ_END = 10, 19
 _RT_WINDOW = datetime.timedelta(hours=12)  # فقط ناموفق/لغوِ تازه (نه بک‌لاگِ قدیمی هنگام ری‌استارت)
+_DUE_WINDOW = datetime.timedelta(days=14)  # یادآوری فقط برای پیگیری‌های اخیر، نه انبارِ قدیمی
 
 
 def _recent(date_created):
@@ -107,6 +109,61 @@ async def _maybe_shift_summary(app):
         print(f"[shift] ارسالِ جمع‌بندی ناموفق بود: {e}")
 
 
+async def _maybe_due_reminders(app):
+    """در شیفت (۱۰ تا ۱۹): یادآوریِ پیگیری‌های سررسیدشده‌ی اخیر را به گروه بفرست.
+
+    فیلترِ تازگی (۱۴ روز) انبارِ قدیمی را خارج می‌کند؛ ضدتکرار با due_sent؛ سقفِ هر دور.
+    صبحِ شروعِ شیفت همه‌ی سررسیدهای شب و سرِ‌تایم هر یادآوری همان موقع می‌آید.
+    """
+    now = clock.tehran_now()
+    if not (_BIZ_START <= now.hour < _BIZ_END):  # سکوتِ بیرونِ شیفت
+        return
+    if not telegram_io._followup_group() or not crm.enabled():
+        return
+    group = telegram_io._followup_group()
+    after = (now - _DUE_WINDOW).strftime("%Y-%m-%d %H:%M")  # مرزِ پایین (تهران) — سرور یا پولر فیلتر می‌کند
+    try:
+        due = await crm.due_leads(after=after, limit=100)
+    except Exception as e:
+        print(f"[due] دریافتِ سررسیدها ناموفق بود: {e}")
+        return
+    floor = clock.utcnow() - _DUE_WINDOW
+    sent = 0
+    bad = 0
+    for d in due:
+        phone = d.get("phone")
+        gmt = d.get("next_follow_up_gmt") or ""
+        if not phone:
+            continue
+        try:  # فقط سررسیدهای اخیر (نه انبارِ قدیمیِ ۱۴۰۴)
+            dt = datetime.datetime.fromisoformat(gmt)
+            if dt.tzinfo is not None:
+                dt = dt.replace(tzinfo=None)
+            if dt < floor:
+                continue
+        except Exception:
+            bad += 1
+            continue
+        key = f"{phone}|{gmt}"
+        if db.due_sent(key):
+            continue
+        try:
+            await app.bot.send_message(group, text=telegram_io._due_text(d), parse_mode="HTML",
+                                       reply_markup=telegram_io._due_kb(phone))
+            db.mark_due_sent(key)
+            sent += 1
+        except Exception as e:
+            print(f"[due] ارسالِ یادآوریِ {phone}: {e}")
+        await asyncio.sleep(0.3)
+        if sent >= 15:
+            print("[due] سقفِ ۱۵ یادآوری در این دور؛ بقیه دورِ بعد.")
+            break
+    if sent:
+        print(f"[due] {sent} یادآوریِ پیگیری ارسال شد.")
+    elif due and bad == len(due):
+        print(f"[due] {len(due)} سررسید آمد ولی همه فرمتِ تاریخِ نامعتبر داشتند (next_follow_up_gmt؟).")
+
+
 async def _poll_orders(app):
     baseline = int(db.get_meta("baseline_id") or 0)
     try:
@@ -151,6 +208,8 @@ async def run(app):
             await _maybe_daily(app)
             await _maybe_leads(app)
             await _maybe_shift_summary(app)
+            if cycle % 5 == 0:  # یادآوری‌ها هر ~۵ دقیقه (نه هر دقیقه)
+                await _maybe_due_reminders(app)
             await reports.prewarm()  # کش را گرم نگه دار → گزارش‌های ادمین آنی
         except Exception as e:
             print(f"[poller] خطای سیکل: {e!r}")

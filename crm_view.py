@@ -132,13 +132,26 @@ def read_kb(phone: str) -> InlineKeyboardMarkup:
 
 
 def action_kb(phone: str) -> InlineKeyboardMarkup:
-    """کیبوردِ کارت با اقدام‌ها (فاز ۲: وضعیت/اساین/یادداشت)."""
+    """کیبوردِ کارت با اقدام‌ها (فاز ۲: وضعیت/اساین/یادداشت/پیگیری)."""
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🔁 تغییر وضعیت", callback_data=f"crm:mst:{phone}"),
          InlineKeyboardButton("👤 اساین به همکار", callback_data=f"crm:masg:{phone}")],
-        [InlineKeyboardButton("📝 ثبت یادداشت", callback_data=f"crm:note:{phone}")],
+        [InlineKeyboardButton("📝 ثبت یادداشت", callback_data=f"crm:note:{phone}"),
+         InlineKeyboardButton("⏰ تعیین پیگیری", callback_data=f"crm:fu:{phone}")],
         [InlineKeyboardButton("🔄 بروزرسانی", callback_data=f"crm:refresh:{phone}"),
          InlineKeyboardButton("✖️ بستن", callback_data="crm:close")],
+    ])
+
+
+def followup_kb(phone: str) -> InlineKeyboardMarkup:
+    """منوی تعیینِ تاریخِ پیگیری (گزینه‌های سریع + تاریخِ دلخواه)."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("فردا", callback_data=f"crm:setfu:{phone}:1"),
+         InlineKeyboardButton("۲ روز دیگر", callback_data=f"crm:setfu:{phone}:2")],
+        [InlineKeyboardButton("۳ روز دیگر", callback_data=f"crm:setfu:{phone}:3"),
+         InlineKeyboardButton("۷ روز دیگر", callback_data=f"crm:setfu:{phone}:7")],
+        [InlineKeyboardButton("✏️ تاریخِ دلخواه", callback_data=f"crm:fucustom:{phone}")],
+        [InlineKeyboardButton("« بازگشت", callback_data=f"crm:refresh:{phone}")],
     ])
 
 

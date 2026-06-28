@@ -40,6 +40,7 @@ def init():
     )
     _conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
     _conn.execute("CREATE TABLE IF NOT EXISTS sent_leads (order_id INTEGER PRIMARY KEY)")
+    _conn.execute("CREATE TABLE IF NOT EXISTS due_sent (k TEXT PRIMARY KEY)")
     _conn.execute(
         """CREATE TABLE IF NOT EXISTS lead_outcomes (
             id        INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,6 +73,17 @@ def lead_sent(order_id) -> bool:
 def mark_lead(order_id):
     with _lock:
         _conn.execute("INSERT OR IGNORE INTO sent_leads(order_id) VALUES (?)", (order_id,))
+        _conn.commit()
+
+
+def due_sent(key) -> bool:
+    with _lock:
+        return _conn.execute("SELECT 1 FROM due_sent WHERE k=?", (key,)).fetchone() is not None
+
+
+def mark_due_sent(key):
+    with _lock:
+        _conn.execute("INSERT OR IGNORE INTO due_sent(k) VALUES (?)", (key,))
         _conn.commit()
 
 

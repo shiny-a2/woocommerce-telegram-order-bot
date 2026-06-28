@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import datetime
 import html
 import io
 import re
 import time
+
+import jdatetime
 
 from telegram import (
     InlineKeyboardButton,
@@ -267,6 +270,37 @@ async def _crm_prompt(context, chat_id, reply_to, text):
         pass
 
 
+_FA_DIGITS = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
+
+
+def _parse_followup(text):
+    """تاریخِ شمسی یا میلادیِ تایپ‌شده → «YYYY-MM-DD HH:MM» میلادی، یا None اگر نامعتبر."""
+    t = (text or "").translate(_FA_DIGITS).strip()
+    m = re.search(r"(\d{4})\D(\d{1,2})\D(\d{1,2})(?:\D+(\d{1,2})\D(\d{1,2}))?", t)
+    if not m:
+        return None
+    y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    hh = int(m.group(4)) if m.group(4) else 10
+    mi = int(m.group(5)) if m.group(5) else 0
+    try:
+        if y < 1700:  # شمسی
+            g = jdatetime.datetime(y, mo, d, hh, mi).togregorian()
+        else:  # میلادی
+            g = datetime.datetime(y, mo, d, hh, mi)
+        return g.strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return None
+
+
+def _to_jalali(greg_str):
+    """«YYYY-MM-DD HH:MM» میلادی → نمایشِ شمسی برای اپراتور."""
+    try:
+        g = datetime.datetime.strptime(greg_str, "%Y-%m-%d %H:%M")
+        return jdatetime.datetime.fromgregorian(datetime=g).strftime("%Y/%m/%d %H:%M")
+    except Exception:
+        return greg_str
+
+
 async def _handle_crm(q, context):
     data = q.data or ""
     if data == "crm:close":
@@ -285,6 +319,9 @@ async def _handle_crm(q, context):
     arg = parts[3] if len(parts) > 3 else ""
     actor = _actor_name(q.from_user)
     uid = q.from_user.id if q.from_user else 0
+    if q.message is None:  # کارتِ قدیمی‌تر از ~۴۸ ساعت → callback بدونِ message
+        await q.answer("این کارت قدیمی شده؛ دوباره /crm را بزن.", show_alert=True)
+        return
 
     async def _refresh():
         text, kb = await _crm_card(phone)
@@ -307,6 +344,36 @@ async def _handle_crm(q, context):
         await q.answer()
         await _crm_prompt(context, q.message.chat_id, q.message.message_id,
                           f"📝 یادداشتت را در ریپلای به همین پیام بنویس.\n<code>{phone}</code>")
+        return
+    if action == "fu":  # منوی تعیینِ پیگیری
+        await q.answer()
+        try:
+            await q.edit_message_reply_markup(reply_markup=crm_view.followup_kb(phone))
+        except Exception:
+            pass
+        return
+    if action == "fucustom":  # تاریخِ دلخواه با ریپلای
+        await q.answer()
+        await _crm_prompt(context, q.message.chat_id, q.message.message_id,
+                          f"🗓️ تاریخِ پیگیری را بنویس و روی همین پیام ریپلای کن (مثل: ۱۴۰۵/۰۵/۰۱ یا 2026-07-01 10:30).\n<code>{phone}</code>")
+        return
+    if action == "setfu":  # ثبتِ پیگیری از گزینه‌ی سریع
+        try:
+            days = int(arg)
+        except ValueError:
+            await q.answer()
+            return
+        when = (clock.tehran_now() + datetime.timedelta(days=days)).replace(hour=10, minute=0, second=0, microsecond=0)
+        dt = when.strftime("%Y-%m-%d %H:%M")
+        try:  # هم وضعیت=پیگیری هم تاریخ → مطمئن در /due می‌آید
+            await crm.set_status(phone, "follow_up", actor, follow_up_at=dt)
+            await q.answer(f"پیگیری: {_to_jalali(dt)} ✅")
+        except Exception as e:
+            print(f"[crm] setfu {phone} {dt}: {e!r}")
+            await q.answer("خطا در ثبتِ پیگیری ❌", show_alert=True)
+            return
+        db.record_crm_action(phone, "followup", uid, actor, detail=dt)
+        await _refresh()
         return
     if action == "mst":  # منوی تغییرِ وضعیت
         await q.answer()
@@ -464,7 +531,7 @@ def _shift_start_epoch() -> float:
 def _shift_summary_text() -> str:
     """جمع‌بندیِ فعالیتِ امروزِ هر اپراتور (اقدامات CRM + نتایجِ لیدها) از شروعِ شیفت."""
     cutoff = _shift_start_epoch()
-    blank = {"bought": 0, "contacted": 0, "noanswer": 0, "status": 0, "note": 0, "assign": 0}
+    blank = {"bought": 0, "contacted": 0, "noanswer": 0, "status": 0, "note": 0, "assign": 0, "followup": 0}
     agg: dict[str, dict] = {}
     for _phone, action, _detail, _uid, name, _ts in db.crm_actions_since(cutoff):
         d = agg.setdefault(name or "—", dict(blank))
@@ -480,7 +547,8 @@ def _shift_summary_text() -> str:
         return head + "\n\nامروز فعالیتی ثبت نشد."
     lines = [head, ""]
     order = [("bought", "🟢 خرید"), ("contacted", "📞 تماس"), ("noanswer", "🔕 بی‌پاسخ"),
-             ("status", "🔁 وضعیت"), ("note", "📝 یادداشت"), ("assign", "👤 اساین")]
+             ("status", "🔁 وضعیت"), ("note", "📝 یادداشت"), ("assign", "👤 اساین"),
+             ("followup", "⏰ پیگیری")]
     grand = 0
     for name, d in sorted(agg.items(), key=lambda kv: -sum(kv[1].values())):
         parts = [f"{lbl} {d[key]}" for key, lbl in order if d.get(key)]
@@ -488,6 +556,24 @@ def _shift_summary_text() -> str:
         lines.append(f"• <b>{html.escape(name)}</b>: " + (" · ".join(parts) if parts else "—"))
     lines += ["", f"جمعِ کل: {grand} اقدام"]
     return "\n".join(lines)
+
+
+def _due_text(d: dict) -> str:
+    """متنِ یک یادآوریِ پیگیری."""
+    name = d.get("name") or "—"
+    phone = d.get("phone") or ""
+    st = d.get("status_label") or d.get("status") or ""
+    who = d.get("assigned_name") or "—"
+    return (
+        "⏰ <b>یادآوریِ پیگیری</b>\n"
+        f"👤 {html.escape(name)} — <code>{html.escape(phone)}</code>\n"
+        f"📌 وضعیت: {html.escape(st)}  ·  🧑‍💼 مسئول: {html.escape(who)}\n"
+        f"🗓️ سررسید: {html.escape(d.get('next_follow_up') or '')}"
+    )
+
+
+def _due_kb(phone: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[crm_view.open_button(crm.normalize_phone(phone))]])
 
 
 async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -621,10 +707,11 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         rep_text = msg.reply_to_message.text or ""
         is_site = "از کدام سایت خرید کرد" in rep_text
         is_prod = "کدام محصول ناموجود بود" in rep_text
-        is_note = (not is_site and not is_prod) and (
+        is_fu = "تاریخِ پیگیری را بنویس" in rep_text
+        is_note = (not is_site and not is_prod and not is_fu) and (
             "یادداشتت را در ریپلای" in rep_text or "ریپلای کن و متن" in rep_text
         )
-        if is_site or is_prod or is_note:
+        if is_site or is_prod or is_fu or is_note:
             uid = update.effective_user.id if update.effective_user else 0
             chat_id = update.effective_chat.id if update.effective_chat else 0
             if not (uid in config.ADMIN_USER_IDS or chat_id in (_followup_group(), config.TELEGRAM_GROUP_ID)):
@@ -643,6 +730,14 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 elif is_prod:
                     await crm.set_status(phone, "product_unavailable", actor, unavailable_product=val)
                     await msg.reply_text("✅ محصولِ ناموجود ثبت شد.")
+                elif is_fu:
+                    dt = _parse_followup(val)
+                    if not dt:
+                        await msg.reply_text("⚠️ فرمتِ تاریخ نامعتبر بود. مثال: ۱۴۰۵/۰۵/۰۱ یا 2026-07-01 10:30")
+                        return
+                    await crm.set_status(phone, "follow_up", actor, follow_up_at=dt)
+                    db.record_crm_action(phone, "followup", uid, actor, detail=dt)
+                    await msg.reply_text(f"✅ پیگیری برای {_to_jalali(dt)} ثبت شد.")
                 else:
                     await crm.add_note(phone, val, actor)
                     db.record_crm_action(phone, "note", uid, actor)

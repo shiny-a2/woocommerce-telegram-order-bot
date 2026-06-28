@@ -64,6 +64,23 @@ async def get_agents() -> list:
     return data.get("agents", []) if isinstance(data, dict) else (data or [])
 
 
+async def due_leads(before=None, after=None, assigned_to=None, limit=50) -> list:
+    """لیدهای سررسیدشده برای یادآوری: [{phone,name,status,status_label,next_follow_up,assigned_name,...}].
+
+    `after` مرزِ پایین است (فقط سررسیدهای اخیر) — اگر سمتِ سرور پشتیبانی شود فیلتر می‌کند،
+    وگرنه نادیده گرفته می‌شود و فیلترِ محلیِ پولر جلوِ انبارِ قدیمی را می‌گیرد.
+    """
+    params = {"limit": limit}
+    if before:
+        params["before"] = before
+    if after:
+        params["after"] = after
+    if assigned_to:
+        params["assigned_to"] = assigned_to
+    data = await asyncio.to_thread(_get_sync, "/due", params)
+    return data.get("due", []) if isinstance(data, dict) else (data or [])
+
+
 # ---------- نوشتن (فاز ۲ — آماده، در UI بعداً وصل می‌شود) ----------
 def _post_sync(path: str, payload: dict):
     r = requests.post(f"{config.CRM_TG_URL}{path}", json=payload, headers=_headers(), timeout=_TIMEOUT)
