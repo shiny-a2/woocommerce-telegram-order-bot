@@ -64,6 +64,17 @@ async def get_agents() -> list:
     return data.get("agents", []) if isinstance(data, dict) else (data or [])
 
 
+async def new_leads(since_id=0, limit=50) -> dict:
+    """لیدهای جدیدِ ثبت‌شده پس از since_id (مرتب بر اساس id صعودی).
+
+    خروجی: {"leads":[{id,phone,name,status,status_label,source,assigned_to,assigned_name,created_local}], "max_id":N}
+    """
+    data = await asyncio.to_thread(_get_sync, "/new-leads", {"since_id": since_id, "limit": limit})
+    if isinstance(data, dict):
+        return data
+    return {"leads": data or [], "max_id": 0}
+
+
 async def due_leads(before=None, after=None, assigned_to=None, limit=50) -> list:
     """لیدهای سررسیدشده برای یادآوری: [{phone,name,status,status_label,next_follow_up,assigned_name,...}].
 

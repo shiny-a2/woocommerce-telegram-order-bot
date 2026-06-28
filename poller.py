@@ -109,6 +109,65 @@ async def _maybe_shift_summary(app):
         print(f"[shift] ارسالِ جمع‌بندی ناموفق بود: {e}")
 
 
+def _recent_due(due):
+    """فقط سررسیدهای اخیر (۱۴ روز) را با کلیدِ ضدتکرار برمی‌گرداند: [(d, key), …]."""
+    floor = clock.utcnow() - _DUE_WINDOW
+    out = []
+    for d in due:
+        phone = d.get("phone")
+        gmt = d.get("next_follow_up_gmt") or ""
+        if not phone:
+            continue
+        try:
+            dt = datetime.datetime.fromisoformat(gmt)
+            if dt.tzinfo is not None:
+                dt = dt.replace(tzinfo=None)
+            if dt < floor:
+                continue
+        except Exception:
+            continue
+        out.append((d, f"{phone}|{gmt}"))
+    return out
+
+
+async def _maybe_morning_worklist(app):
+    """شروعِ شیفت (پنجره‌ی ۱۰–۱۹، یک‌بار در روز): «کارِ امروز» به تفکیکِ همکار به گروه.
+
+    موارد را علامتِ ارسال می‌زند تا به‌صورتِ یادآوریِ تکی دوباره نیایند (فقط سررسیدهای
+    جدیدِ حینِ روز به‌صورتِ تکی می‌آیند).
+    """
+    now = clock.tehran_now()
+    if not (_BIZ_START <= now.hour < _BIZ_END):
+        return
+    today = now.strftime("%Y-%m-%d")
+    if db.get_meta("last_worklist") == today:
+        return
+    if not telegram_io._followup_group() or not crm.enabled():
+        return
+    group = telegram_io._followup_group()
+    after = (now - _DUE_WINDOW).strftime("%Y-%m-%d %H:%M")
+    before = now.strftime("%Y-%m-%d %H:%M")
+    try:
+        due = await crm.due_leads(after=after, before=before, limit=100)
+    except Exception as e:
+        print(f"[worklist] دریافت ناموفق: {e}")
+        return
+    db.set_meta("last_worklist", today)  # حتی اگر خالی، علامت بزن تا هر دقیقه تلاش نشود
+    recent = _recent_due(due)
+    if not recent:
+        return
+    groups = {}
+    for d, _key in recent:
+        groups.setdefault(d.get("assigned_name") or "بدونِ مسئول", []).append(d)
+    try:
+        await app.bot.send_message(group, text=telegram_io._worklist_text(groups), parse_mode="HTML")
+        for _d, key in recent:  # تا یادآوریِ تکیِ همین‌ها دوباره نیاید
+            db.mark_due_sent(key)
+        print(f"[worklist] کارِ امروز ({len(recent)} پیگیری) ارسال شد.")
+    except Exception as e:
+        print(f"[worklist] ارسال ناموفق: {e}")
+
+
 async def _maybe_due_reminders(app):
     """در شیفت (۱۰ تا ۱۹): یادآوریِ پیگیری‌های سررسیدشده‌ی اخیر را به گروه بفرست.
 
@@ -127,41 +186,75 @@ async def _maybe_due_reminders(app):
     except Exception as e:
         print(f"[due] دریافتِ سررسیدها ناموفق بود: {e}")
         return
-    floor = clock.utcnow() - _DUE_WINDOW
+    recent = _recent_due(due)
+    if due and not recent:
+        print(f"[due] {len(due)} سررسید آمد ولی هیچ‌کدام در پنجره‌ی اخیر/قابلِ‌پارس نبود.")
     sent = 0
-    bad = 0
-    for d in due:
-        phone = d.get("phone")
-        gmt = d.get("next_follow_up_gmt") or ""
-        if not phone:
-            continue
-        try:  # فقط سررسیدهای اخیر (نه انبارِ قدیمیِ ۱۴۰۴)
-            dt = datetime.datetime.fromisoformat(gmt)
-            if dt.tzinfo is not None:
-                dt = dt.replace(tzinfo=None)
-            if dt < floor:
-                continue
-        except Exception:
-            bad += 1
-            continue
-        key = f"{phone}|{gmt}"
+    for d, key in recent:
         if db.due_sent(key):
             continue
         try:
             await app.bot.send_message(group, text=telegram_io._due_text(d), parse_mode="HTML",
-                                       reply_markup=telegram_io._due_kb(phone))
+                                       reply_markup=telegram_io._due_kb(d.get("phone")))
             db.mark_due_sent(key)
             sent += 1
         except Exception as e:
-            print(f"[due] ارسالِ یادآوریِ {phone}: {e}")
+            print(f"[due] ارسالِ یادآوریِ {d.get('phone')}: {e}")
         await asyncio.sleep(0.3)
         if sent >= 15:
             print("[due] سقفِ ۱۵ یادآوری در این دور؛ بقیه دورِ بعد.")
             break
     if sent:
         print(f"[due] {sent} یادآوریِ پیگیری ارسال شد.")
-    elif due and bad == len(due):
-        print(f"[due] {len(due)} سررسید آمد ولی همه فرمتِ تاریخِ نامعتبر داشتند (next_follow_up_gmt؟).")
+
+
+async def _poll_new_leads(app):
+    """کارتِ خودکارِ لیدِ جدید در گروه (فقط در شیفت؛ شب‌ها صبح می‌آید).
+
+    تا `crm_newlead_on=1` ست نشود خاموش است. خط مبنا (`crm_lead_baseline`) از بک‌فیلِ
+    لیدهای قدیمی جلوگیری می‌کند. baseline فقط تا لیدی که واقعاً ارسال شد جلو می‌رود.
+    """
+    if db.get_meta("crm_newlead_on") != "1":
+        return
+    now = clock.tehran_now()
+    if not (_BIZ_START <= now.hour < _BIZ_END):
+        return
+    if not telegram_io._followup_group() or not crm.enabled():
+        return
+    baseline = db.get_meta("crm_lead_baseline")
+    try:
+        if baseline is None:  # اولین بار: خط مبنا = ماکزیمم فعلی، بدونِ ارسالِ بک‌لاگ
+            data = await crm.new_leads(since_id=2_000_000_000, limit=1)
+            db.set_meta("crm_lead_baseline", int(data.get("max_id") or 0))
+            print(f"[newlead] خط مبنا روی {int(data.get('max_id') or 0)} تنظیم شد.")
+            return
+        res = await crm.new_leads(since_id=int(baseline), limit=50)
+    except Exception as e:
+        print(f"[newlead] دریافت ناموفق: {e}")
+        return
+    leads = res.get("leads") or []
+    group = telegram_io._followup_group()
+    last_id = int(baseline)
+    sent = 0
+    for L in leads:  # مرتب بر اساس id صعودی
+        if not L.get("phone"):
+            last_id = max(last_id, int(L.get("id") or last_id))
+            continue
+        try:
+            await app.bot.send_message(group, text=telegram_io._newlead_text(L), parse_mode="HTML",
+                                       reply_markup=telegram_io._newlead_kb(L.get("phone")))
+            last_id = int(L.get("id") or last_id)
+            sent += 1
+        except Exception as e:
+            print(f"[newlead] ارسالِ {L.get('phone')}: {e}")
+            break  # baseline را جلو نبر تا دورِ بعد دوباره تلاش شود
+        await asyncio.sleep(0.4)
+        if sent >= 20:
+            break
+    if last_id > int(baseline):
+        db.set_meta("crm_lead_baseline", last_id)
+    if sent:
+        print(f"[newlead] {sent} لیدِ جدید به گروه ارسال شد.")
 
 
 async def _poll_orders(app):
@@ -204,10 +297,12 @@ async def run(app):
             if cycle % 120 == 0:  # هر ~۲ ساعت ساعت را با منبع بیرونی همگام کن
                 await clock.refresh()
             await _poll_orders(app)
+            await _poll_new_leads(app)
             await _poll_edits(app)
             await _maybe_daily(app)
             await _maybe_leads(app)
             await _maybe_shift_summary(app)
+            await _maybe_morning_worklist(app)  # «کارِ امروز» سرِ شیفت (و علامتِ ارسال)
             if cycle % 5 == 0:  # یادآوری‌ها هر ~۵ دقیقه (نه هر دقیقه)
                 await _maybe_due_reminders(app)
             await reports.prewarm()  # کش را گرم نگه دار → گزارش‌های ادمین آنی

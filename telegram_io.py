@@ -549,11 +549,19 @@ def _shift_summary_text() -> str:
     order = [("bought", "🟢 خرید"), ("contacted", "📞 تماس"), ("noanswer", "🔕 بی‌پاسخ"),
              ("status", "🔁 وضعیت"), ("note", "📝 یادداشت"), ("assign", "👤 اساین"),
              ("followup", "⏰ پیگیری")]
+    def _conv(d):
+        eng = d["bought"] + d["contacted"] + d["noanswer"]
+        return (100 * d["bought"] / eng) if eng else -1  # -1 = بدونِ تماس (تبدیل نامحاسبه)
+
+    best = max((( _conv(d), n) for n, d in agg.items()), default=(-1, None))
     grand = 0
     for name, d in sorted(agg.items(), key=lambda kv: -sum(kv[1].values())):
         parts = [f"{lbl} {d[key]}" for key, lbl in order if d.get(key)]
         grand += sum(d.values())
-        lines.append(f"• <b>{html.escape(name)}</b>: " + (" · ".join(parts) if parts else "—"))
+        conv = _conv(d)
+        ctxt = f"  ·  📈 تبدیل {conv:.0f}%" if conv >= 0 else ""
+        crown = " 🏆" if best[1] == name and best[0] > 0 else ""
+        lines.append(f"• <b>{html.escape(name)}</b>{crown}: " + (" · ".join(parts) if parts else "—") + ctxt)
     lines += ["", f"جمعِ کل: {grand} اقدام"]
     return "\n".join(lines)
 
@@ -574,6 +582,41 @@ def _due_text(d: dict) -> str:
 
 def _due_kb(phone: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[crm_view.open_button(crm.normalize_phone(phone))]])
+
+
+def _newlead_text(L: dict) -> str:
+    """کارتِ فشرده‌ی لیدِ جدید برای گروه."""
+    return (
+        "🆕 <b>لیدِ جدید</b>\n"
+        f"👤 {html.escape(L.get('name') or '—')} — <code>{html.escape(L.get('phone') or '')}</code>\n"
+        f"🔖 منبع: {html.escape(L.get('source') or '—')}  ·  🧑‍💼 مسئول: {html.escape(L.get('assigned_name') or '—')}\n"
+        f"🕒 {html.escape(L.get('created_local') or '')}"
+    )
+
+
+def _newlead_kb(phone: str) -> InlineKeyboardMarkup:
+    """دکمه‌های یک‌لمسیِ لیدِ جدید (callbackها همان مسیرهای CRM)."""
+    p = crm.normalize_phone(phone or "")
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📞 تماس گرفتم", callback_data=f"crm:sst:{p}:called"),
+         InlineKeyboardButton("⏰ فردا پیگیری", callback_data=f"crm:setfu:{p}:1")],
+        [InlineKeyboardButton("✅ خرید کرد", callback_data=f"crm:sst:{p}:purchased"),
+         InlineKeyboardButton("👤 کارت کامل", callback_data=f"crm:open:{p}")],
+    ])
+
+
+def _worklist_text(groups: dict) -> str:
+    """لیستِ «کارِ امروز» به تفکیکِ همکار (groups: نامِ مسئول → فهرستِ لیدها)."""
+    L = ["🌅 <b>کارِ امروز — پیگیری‌ها</b>", ""]
+    for who, items in sorted(groups.items(), key=lambda kv: -len(kv[1])):
+        L.append(f"👤 <b>{html.escape(who)}</b> ({len(items)})")
+        for d in items[:15]:
+            L.append(f"   • {html.escape(d.get('name') or '—')} — <code>{html.escape(d.get('phone') or '')}</code>")
+        if len(items) > 15:
+            L.append(f"   … و {len(items) - 15} موردِ دیگر")
+        L.append("")
+    L.append("برای اقدام: شماره را با /crm باز کن، یا منتظرِ یادآوریِ سرِ‌تایم بمان.")
+    return "\n".join(L)
 
 
 async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
