@@ -140,6 +140,7 @@ def action_kb(phone: str) -> InlineKeyboardMarkup:
          InlineKeyboardButton("⏰ تعیین پیگیری", callback_data=f"crm:fu:{phone}")],
         [InlineKeyboardButton("📦 سفارش‌ها", callback_data=f"crm:orders:{phone}"),
          InlineKeyboardButton("👁️ محصولاتِ دیده‌شده", callback_data=f"crm:viewed:{phone}")],
+        [InlineKeyboardButton("✏️ ویرایش نام", callback_data=f"crm:editname:{phone}")],
         [InlineKeyboardButton("🔄 بروزرسانی", callback_data=f"crm:refresh:{phone}"),
          InlineKeyboardButton("✖️ بستن", callback_data="crm:close")],
     ])

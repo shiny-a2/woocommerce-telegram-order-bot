@@ -360,6 +360,11 @@ async def _handle_crm(q, context):
         await _crm_prompt(context, q.message.chat_id, q.message.message_id,
                           f"📝 یادداشتت را در ریپلای به همین پیام بنویس.\n<code>{phone}</code>")
         return
+    if action == "editname":  # ویرایشِ نام و نام‌خانوادگی با ریپلای
+        await q.answer()
+        await _crm_prompt(context, q.message.chat_id, q.message.message_id,
+                          f"✏️ نام و نام‌خانوادگی را بنویس و روی همین پیام ریپلای کن.\n<code>{phone}</code>")
+        return
     if action == "orders":  # سفارش‌های مشتری از ووکامرس
         await q.answer("در حال دریافت سفارش‌ها…")
         try:
@@ -654,27 +659,41 @@ def _back_only_kb(phone: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([[InlineKeyboardButton("« بازگشت", callback_data=f"crm:refresh:{phone}")]])
 
 
+def _toman(val) -> str:
+    try:
+        return f"{int(float(val or 0)) // config.MONEY_DIVISOR:,}"
+    except Exception:
+        return str(val or "0")
+
+
+def _jdate(iso: str) -> str:
+    d = (iso or "")[:10]
+    try:
+        return jdatetime.date.fromgregorian(date=datetime.date.fromisoformat(d)).strftime("%Y/%m/%d") if d else ""
+    except Exception:
+        return d
+
+
 def _orders_text(phone: str, orders: list) -> str:
     if not orders:
         return f"📦 سفارشی برای <code>{html.escape(phone)}</code> در ووکامرس پیدا نشد."
-    L = [f"📦 <b>سفارش‌های مشتری</b> — <code>{html.escape(phone)}</code>", ""]
+    paid = sum(int(float(o.get("total") or 0)) for o in orders if o.get("status") in config.PAID_STATUSES)
+    L = [
+        "📦 <b>سفارش‌های مشتری</b>",
+        f"📞 <code>{html.escape(phone)}</code>  ·  {len(orders)} سفارش  ·  جمعِ خرید: {_toman(paid)} ت",
+    ]
     for o in orders[:10]:
         num = o.get("number") or o.get("id")
         st = _STATUS_FA.get(o.get("status"), o.get("status") or "")
         em = _STATUS_EMOJI.get(o.get("status"), "•")
-        try:
-            toman = f"{int(float(o.get('total') or 0)) // config.MONEY_DIVISOR:,}"
-        except Exception:
-            toman = str(o.get("total") or "0")
-        d = (o.get("date_created") or "")[:10]
-        try:
-            jd = jdatetime.date.fromgregorian(date=datetime.date.fromisoformat(d)).strftime("%Y/%m/%d") if d else ""
-        except Exception:
-            jd = d
-        items = "، ".join((i.get("name") or "")[:30] for i in (o.get("line_items") or [])[:2])
-        L.append(f"{em} <b>#{num}</b> · {html.escape(st)} · {toman} ت · {jd}")
+        items = "، ".join((i.get("name") or "")[:35] for i in (o.get("line_items") or [])[:3])
+        L.append("➖➖➖➖➖➖➖➖➖➖")
+        L.append(f"{em} <b>#{num}</b> — {html.escape(st)}")
+        L.append(f"🗓️ {_jdate(o.get('date_created'))}  ·  💰 {_toman(o.get('total'))} ت")
         if items:
-            L.append(f"    🛍️ {html.escape(items)}")
+            L.append(f"🛍️ {html.escape(items)}")
+    if len(orders) > 10:
+        L.append(f"\n… و {len(orders) - 10} سفارشِ دیگر")
     return "\n".join(L)
 
 
@@ -845,10 +864,11 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_site = "از کدام سایت خرید کرد" in rep_text
         is_prod = "کدام محصول ناموجود بود" in rep_text
         is_fu = "تاریخِ پیگیری را بنویس" in rep_text
-        is_note = (not is_site and not is_prod and not is_fu) and (
+        is_name = "نام و نام‌خانوادگی را بنویس" in rep_text
+        is_note = (not is_site and not is_prod and not is_fu and not is_name) and (
             "یادداشتت را در ریپلای" in rep_text or "ریپلای کن و متن" in rep_text
         )
-        if is_site or is_prod or is_fu or is_note:
+        if is_site or is_prod or is_fu or is_name or is_note:
             uid = update.effective_user.id if update.effective_user else 0
             chat_id = update.effective_chat.id if update.effective_chat else 0
             if not (uid in config.ADMIN_USER_IDS or chat_id == _followup_group()):
@@ -875,6 +895,18 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await crm.set_status(phone, "follow_up", actor, follow_up_at=dt)
                     db.record_crm_action(phone, "followup", uid, actor, detail=dt)
                     await msg.reply_text(f"✅ پیگیری برای {_to_jalali(dt)} ثبت شد.")
+                elif is_name:
+                    parts = val.split()
+                    first = parts[0] if parts else ""
+                    last = " ".join(parts[1:])
+                    fields = {"first_name": first, "last_name": last}
+                    r = await crm.update_fields(phone, "contact", fields, actor)
+                    if not (r or {}).get("ok"):  # contact نبود → روی خودِ لید بنویس
+                        r = await crm.update_fields(phone, "lead", fields, actor)
+                    if (r or {}).get("ok"):
+                        await msg.reply_text(f"✅ نام ثبت شد: {(first + ' ' + last).strip()}")
+                    else:
+                        await msg.reply_text("⚠️ ثبت نشد؛ این شماره در CRM رکوردِ معتبر ندارد.")
                 else:
                     await crm.add_note(phone, val, actor)
                     db.record_crm_action(phone, "note", uid, actor)

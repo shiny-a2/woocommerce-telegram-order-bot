@@ -41,11 +41,27 @@ def normalize_phone(raw) -> str:
     return digits
 
 
+def _parse(r):
+    """بدنه‌ی JSON را برمی‌گرداند حتی با وضعیتِ 4xx، اگر شاملِ کلیدِ ok باشد.
+
+    CRM از کدِ وضعیتِ HTTP معنایی استفاده می‌کند (مثلاً 404 = contact_not_found با بدنه‌ی
+    {"ok":false,"msg":...})؛ پس به‌جای raise، بدنه را برمی‌گردانیم تا فراخوان ok را بررسی کند.
+    خطاهای واقعی (۵xx یا بدونِ JSON) همچنان raise می‌شوند.
+    """
+    try:
+        data = r.json()
+    except Exception:
+        r.raise_for_status()
+        raise
+    if isinstance(data, dict) and "ok" in data:
+        return data
+    r.raise_for_status()
+    return data
+
+
 # ---------- خواندن (فاز ۱) ----------
 def _get_sync(path: str, params: dict | None = None):
-    r = requests.get(f"{config.CRM_TG_URL}{path}", params=params or {}, headers=_headers(), timeout=_TIMEOUT)
-    r.raise_for_status()
-    return r.json()
+    return _parse(requests.get(f"{config.CRM_TG_URL}{path}", params=params or {}, headers=_headers(), timeout=_TIMEOUT))
 
 
 async def ping() -> dict:
@@ -100,9 +116,7 @@ async def due_leads(before=None, after=None, assigned_to=None, limit=50) -> list
 
 # ---------- نوشتن (فاز ۲ — آماده، در UI بعداً وصل می‌شود) ----------
 def _post_sync(path: str, payload: dict):
-    r = requests.post(f"{config.CRM_TG_URL}{path}", json=payload, headers=_headers(), timeout=_TIMEOUT)
-    r.raise_for_status()
-    return r.json()
+    return _parse(requests.post(f"{config.CRM_TG_URL}{path}", json=payload, headers=_headers(), timeout=_TIMEOUT))
 
 
 async def set_status(phone, status, actor_name, follow_up_at=None, note=None, **extra) -> dict:
