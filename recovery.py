@@ -195,9 +195,10 @@ async def tick(app):
         key = f"rec:{oid}:{stage}" + (":test" if is_test else "")
         try:
             res = await _enqueue(target, text, key)
-            if res.get("added"):  # فقط وقتی واقعاً تازه در صف رفت (ok همیشه True است)
+            if res.get("added") or res.get("exists"):  # تازه صف شد یا از قبل بود → هر دو «صف‌شده» (ضدِگیرکردنِ مرحله)
                 db.recovery_mark_sent(oid, stage)
-                sent_this_tick += 1
+                if res.get("added"):
+                    sent_this_tick += 1
                 print(f"[recover] مرحله‌ی {stage} سفارش {oid} در صفِ یوزربات ({'تست' if is_test else 'مشتری'}).")
         except Exception as e:
             print(f"[recover] enqueue {oid}: {e!r}")
