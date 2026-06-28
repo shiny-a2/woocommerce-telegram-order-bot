@@ -360,6 +360,36 @@ async def _handle_crm(q, context):
         await _crm_prompt(context, q.message.chat_id, q.message.message_id,
                           f"📝 یادداشتت را در ریپلای به همین پیام بنویس.\n<code>{phone}</code>")
         return
+    if action == "orders":  # سفارش‌های مشتری از ووکامرس
+        await q.answer("در حال دریافت سفارش‌ها…")
+        try:
+            orders = await woo.search_orders(phone, per_page=10)
+        except Exception as e:
+            print(f"[crm] orders {phone}: {e!r}")
+            await q.answer("خطا در دریافت سفارش‌ها ❌", show_alert=True)
+            return
+        try:
+            await q.edit_message_text(_orders_text(phone, orders), parse_mode=ParseMode.HTML,
+                                      reply_markup=_back_only_kb(phone))
+        except Exception as e:
+            if "not modified" not in str(e).lower():
+                print(f"[crm] orders edit: {e!r}")
+        return
+    if action == "viewed":  # محصولاتِ مشاهده‌شده از CRM
+        await q.answer("در حال دریافت…")
+        try:
+            viewed = await crm.viewed_products(phone)
+        except Exception as e:
+            print(f"[crm] viewed {phone}: {e!r}")
+            await q.answer("بخشِ «محصولاتِ دیده‌شده» هنوز سمتِ CRM فعال نیست.", show_alert=True)
+            return
+        try:
+            await q.edit_message_text(_viewed_text(phone, viewed), parse_mode=ParseMode.HTML,
+                                      reply_markup=_back_only_kb(phone))
+        except Exception as e:
+            if "not modified" not in str(e).lower():
+                print(f"[crm] viewed edit: {e!r}")
+        return
     if action == "fu":  # منوی تعیینِ پیگیری
         await q.answer()
         try:
@@ -618,6 +648,49 @@ def _newlead_kb(phone: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("✅ خرید کرد", callback_data=f"crm:sst:{p}:purchased"),
          InlineKeyboardButton("👤 کارت کامل", callback_data=f"crm:open:{p}")],
     ])
+
+
+def _back_only_kb(phone: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton("« بازگشت", callback_data=f"crm:refresh:{phone}")]])
+
+
+def _orders_text(phone: str, orders: list) -> str:
+    if not orders:
+        return f"📦 سفارشی برای <code>{html.escape(phone)}</code> در ووکامرس پیدا نشد."
+    L = [f"📦 <b>سفارش‌های مشتری</b> — <code>{html.escape(phone)}</code>", ""]
+    for o in orders[:10]:
+        num = o.get("number") or o.get("id")
+        st = _STATUS_FA.get(o.get("status"), o.get("status") or "")
+        em = _STATUS_EMOJI.get(o.get("status"), "•")
+        try:
+            toman = f"{int(float(o.get('total') or 0)) // config.MONEY_DIVISOR:,}"
+        except Exception:
+            toman = str(o.get("total") or "0")
+        d = (o.get("date_created") or "")[:10]
+        try:
+            jd = jdatetime.date.fromgregorian(date=datetime.date.fromisoformat(d)).strftime("%Y/%m/%d") if d else ""
+        except Exception:
+            jd = d
+        items = "، ".join((i.get("name") or "")[:30] for i in (o.get("line_items") or [])[:2])
+        L.append(f"{em} <b>#{num}</b> · {html.escape(st)} · {toman} ت · {jd}")
+        if items:
+            L.append(f"    🛍️ {html.escape(items)}")
+    return "\n".join(L)
+
+
+def _viewed_text(phone: str, viewed: list) -> str:
+    if not viewed:
+        return f"👁️ موردی برای <code>{html.escape(phone)}</code> ثبت نشده."
+    L = [f"👁️ <b>محصولاتِ دیده‌شده</b> — <code>{html.escape(phone)}</code>", ""]
+    for v in viewed[:20]:
+        name = v.get("product") or v.get("name") or "—"
+        when = v.get("viewed_local") or v.get("viewed_at") or ""
+        cnt = v.get("count")
+        line = f"• {html.escape(str(name))}" + (f" ×{cnt}" if cnt else "")
+        if when:
+            line += f" — <i>{html.escape(str(when))}</i>"
+        L.append(line)
+    return "\n".join(L)
 
 
 def _worklist_text(groups: dict) -> str:

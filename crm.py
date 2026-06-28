@@ -64,6 +64,12 @@ async def get_agents() -> list:
     return data.get("agents", []) if isinstance(data, dict) else (data or [])
 
 
+async def viewed_products(phone, limit=20) -> list:
+    """محصولاتِ مشاهده‌شده‌ی مشتری (ردیابیِ CRM): [{product, product_id?, url?, viewed_local, count?}]."""
+    data = await asyncio.to_thread(_get_sync, "/viewed", {"phone": normalize_phone(phone), "limit": limit})
+    return data.get("viewed", []) if isinstance(data, dict) else (data or [])
+
+
 async def new_leads(since_id=0, limit=50) -> dict:
     """لیدهای جدیدِ ثبت‌شده پس از since_id (مرتب بر اساس id صعودی).
 
