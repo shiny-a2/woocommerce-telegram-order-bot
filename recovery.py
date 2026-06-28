@@ -109,13 +109,13 @@ def _build_message(order, rec, stage) -> str:
     return "\n".join(lines)
 
 
-def _elapsed_min(date_created) -> float:
-    """دقیقه‌های گذشته از ثبتِ سفارش (هر دو به وقتِ تهران)."""
+def _elapsed_min(date_created_gmt) -> float:
+    """دقیقه‌های گذشته از ثبتِ سفارش (مبنا: UTC، مستقل از تایم‌زونِ سایت)."""
     try:
-        dt = datetime.datetime.fromisoformat((date_created or "").replace("Z", ""))
+        dt = datetime.datetime.fromisoformat((date_created_gmt or "").replace("Z", ""))
         if dt.tzinfo is not None:
             dt = dt.replace(tzinfo=None)
-        return (clock.tehran_now() - dt).total_seconds() / 60.0
+        return (clock.utcnow() - dt).total_seconds() / 60.0
     except Exception:
         return 0.0
 
@@ -126,6 +126,14 @@ async def tick(app):
     now = clock.tehran_now()
     now_e = time.time()
     within = config.RECOVERY_SEND_START <= now.hour < config.RECOVERY_SEND_END
+    is_test = config.RECOVERY_MODE == "test"
+    if is_test and not config.RECOVERY_TEST_PHONE:
+        print("[recover] حالتِ تست ولی RECOVERY_TEST_PHONE خالی است — هیچ پیامی ارسال نمی‌شود.")
+        return
+    # اگر حالت (test/live) عوض شده، ردیف‌های پرداخت‌نشده را پاک کن تا مرحله‌ها قاطیِ هم نشوند
+    if db.get_meta("recovery_mode_last") != config.RECOVERY_MODE:
+        db.recovery_reset_unpaid()
+        db.set_meta("recovery_mode_last", config.RECOVERY_MODE)
 
     # خط مبنا: اولین فعال‌سازی فقط زمان را ثبت می‌کند تا بک‌لاگِ قدیمی سیل‌آسا پیام نگیرد
     base = db.get_meta("recovery_baseline_ts")
@@ -142,17 +150,18 @@ async def tick(app):
         try:
             orders += await woo.get("orders", {
                 "status": st, "per_page": 40, "after": after, "orderby": "date", "order": "desc",
-                "_fields": "id,status,date_created,total,order_key,billing,line_items",
+                "_fields": "id,status,date_created_gmt,total,order_key,billing,line_items",
             })
         except Exception as e:
             print(f"[recover] گرفتنِ سفارش‌های {st}: {e!r}")
 
+    sent_this_tick = 0
     for o in orders:
         oid = o.get("id")
         phone = (o.get("billing") or {}).get("phone")
         if not oid or not phone:
             continue
-        elapsed = _elapsed_min(o.get("date_created"))
+        elapsed = _elapsed_min(o.get("date_created_gmt"))
         created_e = now_e - elapsed * 60.0
         if created_e < base:  # سفارشِ قبل از فعال‌سازی → نادیده (ضدِسیلِ بک‌لاگ)
             continue
@@ -173,29 +182,32 @@ async def tick(app):
             print(f"[recover] /recovery {oid}: {e!r}")
             continue
         if rec.get("paid"):
-            db.recovery_mark_paid(oid, rec.get("amount_due") or o.get("total"))
+            if row["sent1_at"]:  # فقط اگر واقعاً پیام رفته بود → بازیابیِ واقعی (نه پرداختِ ارگانیک)
+                db.recovery_mark_paid(oid, rec.get("amount_due") or o.get("total"))
             continue
-        if stage == 1:
-            link_ok = bool(_pay_link(o) or rec.get("recover_url"))
-        else:  # مرحله‌ی ۲ فقط وقتی کوپن آماده است (وگرنه صبر کن تا کوپن بیاید)
-            link_ok = bool(rec.get("coupon") and rec.get("coupon_percent"))
+        link_ok = bool(_pay_link(o) or rec.get("recover_url"))  # مرحله‌ی ۲ کوپن را اگر بود می‌گذارد، وگرنه یادآوریِ ساده
         if not link_ok:
             continue
         text = _build_message(o, rec, stage)
-        is_test = config.RECOVERY_MODE == "test"
+        if is_test:
+            text = f"🧪 [پیامِ تست — سفارش {oid}]\n" + text
         target = config.RECOVERY_TEST_PHONE if is_test else phone
         key = f"rec:{oid}:{stage}" + (":test" if is_test else "")
         try:
             res = await _enqueue(target, text, key)
-            if res.get("ok"):
+            if res.get("added"):  # فقط وقتی واقعاً تازه در صف رفت (ok همیشه True است)
                 db.recovery_mark_sent(oid, stage)
+                sent_this_tick += 1
                 print(f"[recover] مرحله‌ی {stage} سفارش {oid} در صفِ یوزربات ({'تست' if is_test else 'مشتری'}).")
         except Exception as e:
             print(f"[recover] enqueue {oid}: {e!r}")
+        if sent_this_tick >= config.RECOVERY_MAX_PER_TICK:
+            print(f"[recover] سقفِ {config.RECOVERY_MAX_PER_TICK} پیام در این چرخه پر شد؛ بقیه چرخه‌ی بعد.")
+            break
         await asyncio.sleep(0.3)
 
     # ۲) بازبینیِ پرداختِ سفارش‌هایی که پیام گرفتند ولی هنوز paid نشده‌اند → ثبتِ درآمدِ بازیابی‌شده
-    for oid, _phone in db.recovery_active(now_e - config.RECOVERY_WINDOW_H * 7200):
+    for oid, _phone in db.recovery_active(now_e - config.RECOVERY_WINDOW_H * 3600 * 2):  # ۲× پنجره برای پرداخت‌های دیرهنگام
         try:
             rec = await crm.recovery(order_id=oid)
             if rec.get("paid"):

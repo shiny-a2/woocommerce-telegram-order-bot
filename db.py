@@ -172,6 +172,13 @@ def recovery_mark_paid(order_id, amount):
         _conn.commit()
 
 
+def recovery_reset_unpaid():
+    """ردیف‌های پرداخت‌نشده را پاک می‌کند (هنگام تغییرِ حالتِ test↔live تا مرحله‌ها قاطی نشوند)."""
+    with _lock:
+        _conn.execute("DELETE FROM recovery WHERE paid=0")
+        _conn.commit()
+
+
 def recovery_active(since_ts):
     """ردیف‌هایی که پیامی برایشان رفته، هنوز paid نشده‌اند و اخیرند — برای بازبینیِ پرداخت."""
     with _lock:

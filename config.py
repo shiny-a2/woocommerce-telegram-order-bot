@@ -62,6 +62,7 @@ RECOVERY_SECOND_DELAY_H = _int("RECOVERY_SECOND_DELAY_H", 24)    # پیامِ د
 RECOVERY_WINDOW_H = _int("RECOVERY_WINDOW_H", 48)               # فقط سفارش‌های این بازه
 RECOVERY_SEND_START = _int("RECOVERY_SEND_START", 10)           # ساعتِ مجازِ ارسال به مشتری (تهران)
 RECOVERY_SEND_END = _int("RECOVERY_SEND_END", 21)
+RECOVERY_MAX_PER_TICK = _int("RECOVERY_MAX_PER_TICK", 8)        # سقفِ پیام در هر چرخه (ضدِسیلِ بک‌لاگ)
 # اتصال به صفِ تراکنشیِ یوزرباتِ tg-outreach
 TXOUT_URL = _get("TXOUT_URL", "http://127.0.0.1:8091/api/tx")
 TXOUT_TOKEN = _get("TXOUT_TOKEN", "")  # همان DASH_TOKEN یوزربات

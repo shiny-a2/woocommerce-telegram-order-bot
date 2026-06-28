@@ -300,7 +300,10 @@ async def run(app):
             await _maybe_morning_worklist(app)  # «کارِ امروز» سرِ شیفت (و علامتِ ارسال)
             if cycle % 5 == 0:  # هر ~۵ دقیقه
                 await _maybe_due_reminders(app)
-                await recovery.tick(app)  # بازیابیِ پرداختِ ناموفق (خاموش تا RECOVERY_MODE ست شود)
+                try:
+                    await recovery.tick(app)  # بازیابیِ پرداختِ ناموفق (خاموش تا RECOVERY_MODE ست شود)
+                except Exception as e:
+                    print(f"[recover] tick خطا: {e!r}")
             await reports.prewarm()  # کش را گرم نگه دار → گزارش‌های ادمین آنی
         except Exception as e:
             print(f"[poller] خطای سیکل: {e!r}")
