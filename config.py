@@ -51,6 +51,12 @@ WOO_CK = _get("WOO_CK", "")
 WOO_CS = _get("WOO_CS", "")
 WOO_WEBHOOK_SECRET = _get("WOO_WEBHOOK_SECRET", "")
 
+# ---------- CRM (افزونه‌ی a2-crm-plugin، REST اختصاصیِ تلگرام) ----------
+# پایه‌ی REST که خودِ افزونه می‌دهد، شاملِ «…/wp-json/a2crm/v1/tg»
+CRM_TG_URL = (_get("CRM_TG_URL", "") or "").rstrip("/")
+# توکنِ اختصاصیِ تلگرام (هدر X-A2-Token). تا ست نشود، بخشِ CRM در ربات خاموش است
+CRM_TG_TOKEN = _get("CRM_TG_TOKEN", "")
+
 # ---------- رفتار ----------
 POLL_INTERVAL_SECONDS = _int("POLL_INTERVAL_SECONDS", 60)
 POST_STATUSES = _csv("POST_STATUSES")

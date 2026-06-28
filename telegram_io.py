@@ -26,6 +26,8 @@ from telegram.ext import (
 
 import clock
 import config
+import crm
+import crm_view
 import db
 import reports
 import woo
@@ -213,17 +215,170 @@ def _tg_link(phone):
 def _lead_kb(oid, phone=None):
     rows = [[
         InlineKeyboardButton("📞 تماس شد", callback_data=f"lead:contacted:{oid}"),
-        InlineKeyboardButton("🚫 پاسخ نداد", callback_data=f"lead:noanswer:{oid}"),
+        InlineKeyboardButton("🔕 پاسخ نداد", callback_data=f"lead:noanswer:{oid}"),
         InlineKeyboardButton("✅ خرید کرد", callback_data=f"lead:bought:{oid}"),
     ]]
     link = _tg_link(phone)
     if link:
         rows.append([InlineKeyboardButton("💬 پیام در تلگرام", url=link)])
+    p = crm.normalize_phone(phone or "")
+    if p and crm.enabled():
+        rows.append([crm_view.open_button(p)])
     return InlineKeyboardMarkup(rows)
 
 
 def _followup_group():
     return int(db.get_meta("followup_group") or config.FOLLOWUP_GROUP_ID or 0)
+
+
+# ---------- CRM (فاز ۱ — خواندن) ----------
+def _crm_can_read(q) -> bool:
+    """خواندنِ CRM: ادمین‌ها همه‌جا؛ یا اعضای گروهِ پیگیری/گروهِ اصلی."""
+    if q.from_user and q.from_user.id in config.ADMIN_USER_IDS:
+        return True
+    chat_id = q.message.chat_id if q.message else 0
+    return chat_id in (_followup_group(), config.TELEGRAM_GROUP_ID)
+
+
+def _actor_name(user) -> str:
+    """نامِ نمایشیِ اپراتورِ زننده برای ثبت در CRM."""
+    if not user:
+        return "اپراتور"
+    return user.full_name or (("@" + user.username) if user.username else str(user.id))
+
+
+async def _crm_card(phone):
+    """(متنِ کارت، کیبورد) — اگر رکورد پیدا شد کیبوردِ اقدام، وگرنه فقط بروزرسانی/بستن."""
+    try:
+        prof = await crm.get_profile(phone)
+        text = crm_view.render_profile(prof)
+        kb = crm_view.action_kb(phone) if prof.get("found") else crm_view.read_kb(phone)
+    except Exception as e:
+        print(f"[crm] دریافتِ پروفایلِ {phone}: {e!r}")
+        text = "⚠️ خطا در دریافت اطلاعاتِ CRM. کمی بعد دوباره امتحان کن."
+        kb = crm_view.read_kb(phone)
+    return text, kb
+
+
+async def _crm_prompt(context, chat_id, reply_to, text):
+    try:
+        await context.bot.send_message(chat_id, text, parse_mode=ParseMode.HTML, reply_to_message_id=reply_to)
+    except Exception:
+        pass
+
+
+async def _handle_crm(q, context):
+    data = q.data or ""
+    if data == "crm:close":
+        await q.answer()
+        try:
+            await q.message.delete()
+        except Exception:
+            pass
+        return
+    if not crm.enabled():
+        await q.answer("اتصال CRM فعال نیست.", show_alert=True)
+        return
+    parts = data.split(":")
+    action = parts[1] if len(parts) > 1 else ""
+    phone = crm.normalize_phone(parts[2]) if len(parts) > 2 else ""
+    arg = parts[3] if len(parts) > 3 else ""
+    actor = _actor_name(q.from_user)
+    uid = q.from_user.id if q.from_user else 0
+
+    async def _refresh():
+        text, kb = await _crm_card(phone)
+        try:
+            await q.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        except Exception as e:
+            if "not modified" not in str(e).lower():
+                print(f"[crm] بروزرسانیِ کارت ناموفق: {e!r}")
+
+    if action == "open":  # کارتِ تازه
+        await q.answer("در حال دریافت…")
+        text, kb = await _crm_card(phone)
+        await context.bot.send_message(q.message.chat_id, text, parse_mode=ParseMode.HTML, reply_markup=kb)
+        return
+    if action == "refresh":
+        await q.answer()
+        await _refresh()
+        return
+    if action == "note":  # درخواستِ یادداشت با ریپلای
+        await q.answer()
+        await _crm_prompt(context, q.message.chat_id, q.message.message_id,
+                          f"📝 یادداشتت را در ریپلای به همین پیام بنویس.\n<code>{phone}</code>")
+        return
+    if action == "mst":  # منوی تغییرِ وضعیت
+        await q.answer()
+        try:
+            await q.edit_message_reply_markup(reply_markup=crm_view.status_kb(phone))
+        except Exception:
+            pass
+        return
+    if action == "sst":  # ثبتِ وضعیت
+        try:
+            r = await crm.set_status(phone, arg, actor)
+            await q.answer(f"وضعیت: {r.get('status_label', arg)} ✅")
+        except Exception as e:
+            print(f"[crm] set_status {phone} {arg}: {e!r}")
+            await q.answer("خطا در ثبتِ وضعیت ❌", show_alert=True)
+            return
+        db.record_crm_action(phone, "status", uid, actor, detail=arg)
+        await _refresh()
+        if arg == "purchased_other_site":
+            await _crm_prompt(context, q.message.chat_id, q.message.message_id,
+                              f"⚠️ یک قدم مانده — 🌐 از کدام سایت خرید کرد؟ روی همین پیام ریپلای کن.\n<code>{phone}</code>")
+        elif arg == "product_unavailable":
+            await _crm_prompt(context, q.message.chat_id, q.message.message_id,
+                              f"⚠️ یک قدم مانده — 📦 کدام محصول ناموجود بود؟ روی همین پیام ریپلای کن.\n<code>{phone}</code>")
+        return
+    if action == "masg":  # منوی اساین
+        await q.answer("بارگذاری همکاران…")
+        try:
+            agents = await crm.get_agents()
+        except Exception as e:
+            print(f"[crm] get_agents: {e!r}")
+            await q.answer("خطا در دریافتِ همکاران ❌", show_alert=True)
+            return
+        try:
+            await q.edit_message_reply_markup(reply_markup=crm_view.assign_kb(phone, agents))
+        except Exception:
+            pass
+        return
+    if action == "sasg":  # ثبتِ اساین
+        try:
+            r = await crm.assign(phone, int(arg), actor)
+            await q.answer(f"اساین شد به {r.get('assigned_name', '')} ✅")
+        except Exception as e:
+            print(f"[crm] assign {phone} {arg}: {e!r}")
+            await q.answer("خطا در اساین ❌", show_alert=True)
+            return
+        db.record_crm_action(phone, "assign", uid, actor, detail=r.get("assigned_name", ""))
+        await _refresh()
+        return
+    await q.answer()
+
+
+async def cmd_crm(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """‎/crm 09xxxxxxxxx → کارتِ کاملِ مشتری/لید از CRM."""
+    msg = update.effective_message
+    if not msg:
+        return
+    chat = update.effective_chat
+    print(f"[cmd] /crm از {update.effective_user.id if update.effective_user else '?'} در چت {chat.id if chat else '?'} args={context.args}")
+    allowed = _authorized(update) or (chat and chat.id in (_followup_group(), config.TELEGRAM_GROUP_ID))
+    if not allowed:
+        return
+    if not crm.enabled():
+        await msg.reply_text("اتصال CRM فعال نیست.")
+        return
+    phone = crm.normalize_phone((context.args or [""])[0])
+    if not phone:
+        await msg.reply_text("شماره را بده؛ مثلاً:  /crm 09121234567")
+        return
+    wait = await msg.reply_text("⏳ در حال دریافت پروفایل CRM…")
+    text, kb = await _crm_card(phone)
+    await wait.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
 
 
 async def _handle_lead(q):
@@ -299,14 +454,48 @@ async def _outcomes_report():
     return "\n".join(lines)
 
 
+def _shift_start_epoch() -> float:
+    """epochِ «امروز ساعت ۱۰ صبحِ تهران» (شروعِ شیفت)؛ هرگز در آینده نیست."""
+    now = clock.tehran_now()
+    start = now.replace(hour=10, minute=0, second=0, microsecond=0)
+    return time.time() - max(0.0, (now - start).total_seconds())
+
+
+def _shift_summary_text() -> str:
+    """جمع‌بندیِ فعالیتِ امروزِ هر اپراتور (اقدامات CRM + نتایجِ لیدها) از شروعِ شیفت."""
+    cutoff = _shift_start_epoch()
+    blank = {"bought": 0, "contacted": 0, "noanswer": 0, "status": 0, "note": 0, "assign": 0}
+    agg: dict[str, dict] = {}
+    for _phone, action, _detail, _uid, name, _ts in db.crm_actions_since(cutoff):
+        d = agg.setdefault(name or "—", dict(blank))
+        if action in d:
+            d[action] += 1
+    for _oid, action, _uid, name, _ts in db.outcomes_since(cutoff):
+        d = agg.setdefault(name or "—", dict(blank))
+        if action in d:
+            d[action] += 1
+
+    head = "📋 <b>جمع‌بندیِ پایانِ شیفت</b> (۱۰ تا ۱۹)\n🗓️ " + reports.jalali_str(clock.tehran_now())
+    if not agg:
+        return head + "\n\nامروز فعالیتی ثبت نشد."
+    lines = [head, ""]
+    order = [("bought", "🟢 خرید"), ("contacted", "📞 تماس"), ("noanswer", "🔕 بی‌پاسخ"),
+             ("status", "🔁 وضعیت"), ("note", "📝 یادداشت"), ("assign", "👤 اساین")]
+    grand = 0
+    for name, d in sorted(agg.items(), key=lambda kv: -sum(kv[1].values())):
+        parts = [f"{lbl} {d[key]}" for key, lbl in order if d.get(key)]
+        grand += sum(d.values())
+        lines.append(f"• <b>{html.escape(name)}</b>: " + (" · ".join(parts) if parts else "—"))
+    lines += ["", f"جمعِ کل: {grand} اقدام"]
+    return "\n".join(lines)
+
+
 async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    print(f"[cmd] /menu از {update.effective_user.id if update.effective_user else '?'}")
-    if not _authorized(update):
-        print("[cmd] /menu — غیرمجاز")
+    msg = update.effective_message
+    if not msg or not _authorized(update):
         return
     context.user_data["awaiting_search"] = False
-    await update.message.reply_text(_MENU_TITLE, reply_markup=_main_menu(), parse_mode=ParseMode.HTML)
-    print("[cmd] /menu — منو ارسال شد")
+    await msg.reply_text(_MENU_TITLE, reply_markup=_main_menu(), parse_mode=ParseMode.HTML)
 
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -317,6 +506,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     print(f"[cb] دریافت: {data} از {q.from_user.id if q.from_user else '?'}")
     if data.startswith("lead:"):  # دکمه‌های پیگیری در گروه — برای همه‌ی اعضای تیم
         await _handle_lead(q)
+        return
+    if data.startswith("crm:"):  # کارت/خواندنِ CRM — تیم در گروه
+        if not _crm_can_read(q):
+            await q.answer("دسترسی ندارید.", show_alert=True)
+            return
+        await _handle_crm(q, context)
         return
     if not q.from_user or q.from_user.id not in config.ADMIN_USER_IDS:
         await q.answer("اجازه‌ی دسترسی ندارید.", show_alert=True)
@@ -417,15 +612,54 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """دریافت عبارت جستجو پس از زدن دکمه‌ی «جستجوی سفارش»."""
+    """یادداشت/جزئیاتِ CRM (ریپلای روی کارت/پرامپت) یا عبارتِ جستجوی سفارش."""
+    msg = update.message
+    if not msg:  # پیامِ ادیت‌شده / پستِ کانال → نادیده
+        return
+    # ثبتِ CRM با ریپلای (با Privacyِ گروه هم کار می‌کند)
+    if msg.reply_to_message and crm.enabled():
+        rep_text = msg.reply_to_message.text or ""
+        is_site = "از کدام سایت خرید کرد" in rep_text
+        is_prod = "کدام محصول ناموجود بود" in rep_text
+        is_note = (not is_site and not is_prod) and (
+            "یادداشتت را در ریپلای" in rep_text or "ریپلای کن و متن" in rep_text
+        )
+        if is_site or is_prod or is_note:
+            uid = update.effective_user.id if update.effective_user else 0
+            chat_id = update.effective_chat.id if update.effective_chat else 0
+            if not (uid in config.ADMIN_USER_IDS or chat_id in (_followup_group(), config.TELEGRAM_GROUP_ID)):
+                return
+            m = re.search(r"(?<!\d)0\d{10}(?!\d)", rep_text)
+            val = (msg.text or "").strip()
+            actor = _actor_name(update.effective_user)
+            if not (m and val):
+                await msg.reply_text("⚠️ شماره یا متن خوانده نشد؛ دوباره روی همان پیام ریپلای کن و متن را بنویس.")
+                return
+            phone = m.group(0)
+            try:
+                if is_site:
+                    await crm.set_status(phone, "purchased_other_site", actor, other_site=val)
+                    await msg.reply_text("✅ سایتِ خرید ثبت شد.")
+                elif is_prod:
+                    await crm.set_status(phone, "product_unavailable", actor, unavailable_product=val)
+                    await msg.reply_text("✅ محصولِ ناموجود ثبت شد.")
+                else:
+                    await crm.add_note(phone, val, actor)
+                    db.record_crm_action(phone, "note", uid, actor)
+                    await msg.reply_text("✅ یادداشت در CRM ثبت شد.")
+            except Exception as e:
+                print(f"[crm] ثبتِ ریپلای {phone}: {e!r}")
+                await msg.reply_text("⚠️ ثبت نشد (خطای CRM). دوباره امتحان کن.")
+            return
+
     if not _authorized(update) or not context.user_data.get("awaiting_search"):
         return
     context.user_data["awaiting_search"] = False
-    query = (update.message.text or "").strip()
+    query = (msg.text or "").strip()
     if not query:
         return
     chat_id = update.effective_chat.id
-    await update.message.reply_text(f"🔍 در حال جستجوی «{query}» …")
+    await msg.reply_text(f"🔍 در حال جستجوی «{query}» …")
     try:
         orders = await woo.search_orders(query, per_page=10)
     except Exception as e:
@@ -452,23 +686,25 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_range(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not _authorized(update):
+    msg = update.effective_message
+    if not msg or not _authorized(update):
         return
     if len(context.args) != 2:
-        await update.message.reply_text("فرمت درست: /range ۱۴۰۳/۰۱/۰۱ ۱۴۰۳/۰۱/۳۱")
+        await msg.reply_text("فرمت درست: /range ۱۴۰۳/۰۱/۰۱ ۱۴۰۳/۰۱/۳۱")
         return
     try:
-        await update.message.reply_text(await reports.report("range", context.args))
+        await msg.reply_text(await reports.report("range", context.args))
     except Exception as e:
-        await update.message.reply_text(f"خطا: {e}")
+        await msg.reply_text(f"خطا: {e}")
 
 
 async def cmd_setfollowup(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not _authorized(update):
+    msg = update.effective_message
+    if not msg or not _authorized(update):
         return
     chat = update.effective_chat
     db.set_meta("followup_group", str(chat.id))
-    await update.message.reply_text(f"✅ این گروه به‌عنوان گروه پیگیری تنظیم شد (id={chat.id}).")
+    await msg.reply_text(f"✅ این گروه به‌عنوان گروه پیگیری تنظیم شد (id={chat.id}).")
 
 
 def register_handlers(app: Application):
@@ -477,5 +713,6 @@ def register_handlers(app: Application):
     app.add_handler(CommandHandler("help", cmd_menu))
     app.add_handler(CommandHandler("setfollowup", cmd_setfollowup))
     app.add_handler(CommandHandler("range", cmd_range))
+    app.add_handler(CommandHandler("crm", cmd_crm))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.add_handler(CallbackQueryHandler(on_callback))

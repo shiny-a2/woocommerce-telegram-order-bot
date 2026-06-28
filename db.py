@@ -50,6 +50,17 @@ def init():
             ts        REAL
         )"""
     )
+    _conn.execute(
+        """CREATE TABLE IF NOT EXISTS crm_actions (
+            id        INTEGER PRIMARY KEY AUTOINCREMENT,
+            phone     TEXT,
+            action    TEXT,
+            detail    TEXT,
+            user_id   INTEGER,
+            user_name TEXT,
+            ts        REAL
+        )"""
+    )
     _conn.commit()
 
 
@@ -77,6 +88,24 @@ def outcomes_since(since_ts):
     with _lock:
         cur = _conn.execute(
             "SELECT order_id, action, user_id, user_name, ts FROM lead_outcomes WHERE ts>=? ORDER BY ts DESC",
+            (since_ts,),
+        )
+        return cur.fetchall()
+
+
+def record_crm_action(phone, action, user_id, user_name, detail=""):
+    with _lock:
+        _conn.execute(
+            "INSERT INTO crm_actions(phone, action, detail, user_id, user_name, ts) VALUES (?,?,?,?,?,?)",
+            (str(phone), action, detail or "", user_id, user_name, time.time()),
+        )
+        _conn.commit()
+
+
+def crm_actions_since(since_ts):
+    with _lock:
+        cur = _conn.execute(
+            "SELECT phone, action, detail, user_id, user_name, ts FROM crm_actions WHERE ts>=? ORDER BY ts DESC",
             (since_ts,),
         )
         return cur.fetchall()

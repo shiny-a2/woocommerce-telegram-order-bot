@@ -10,7 +10,7 @@ import os
 import sys
 import time
 
-from telegram import Update
+from telegram import BotCommand, Update
 from telegram.ext import Application
 
 import clock
@@ -77,11 +77,23 @@ async def _on_error(update, context):
     print(f"[ptb-error] {context.error!r}")
 
 
+_COMMANDS = [
+    BotCommand("menu", "منوی گزارش‌ها و فروش"),
+    BotCommand("crm", "کارت مشتری با شماره — مثل: /crm 0912…"),
+    BotCommand("range", "گزارش فروش در بازه‌ی دلخواه شمسی"),
+    BotCommand("setfollowup", "ثبت این گروه به‌عنوان گروه پیگیری"),
+]
+
+
 async def _post_init(app):
-    """پس از راه‌اندازیِ ربات: دیتابیس، استان‌ها، خط مبنا، و تسکِ پولینگ پس‌زمینه."""
+    """پس از راه‌اندازیِ ربات: دیتابیس، استان‌ها، خط مبنا، دستورها، و تسکِ پولینگ پس‌زمینه."""
     db.init()
     await woo.load_states()
     await _ensure_baseline()
+    try:
+        await app.bot.set_my_commands(_COMMANDS)
+    except Exception as e:
+        print(f"[bot] ثبت دستورها ناموفق بود: {e}")
     app.bot_data["_poller"] = asyncio.create_task(poller.run(app))
     if config.WEBHOOK_ENABLED:
         import webhook_server
