@@ -43,31 +43,67 @@ async def _enqueue(phone, text, key):
     return await asyncio.to_thread(_enqueue_sync, phone, text, key)
 
 
-def _build_message(order, rec) -> str:
-    """پیامِ بازیابیِ صمیمانه و حرفه‌ای (متنِ ساده برای یوزربات)."""
+def _pay_link(order) -> str:
+    """لینکِ ادامه‌ی پرداختِ همان سفارش (بدونِ تخفیف)."""
+    key = order.get("order_key") or ""
+    oid = order.get("id")
+    if key and oid:
+        return f"{config.WOO_URL}/checkout/order-pay/{oid}/?pay_for_order=true&key={key}"
+    return ""
+
+
+def _build_message(order, rec, stage) -> str:
+    """پیامِ بازیابی (متنِ ساده). مرحله‌ی ۱ = تشویق بدونِ تخفیف؛ مرحله‌ی ۲ = کدِ تخفیف."""
     b = order.get("billing") or {}
     name = (b.get("first_name") or "").strip() or "دوست"
     items = order.get("line_items") or []
     product = (items[0].get("name") if items else "") or "سفارشتون"
-    url = rec.get("recover_url") or ""
-    coupon = rec.get("coupon") or ""
-    pct = rec.get("coupon_percent") or 0
-    exp = rec.get("expires_local") or ""
+    full = rec.get("amount_due") or order.get("total") or 0
 
+    if stage == 1:  # تشویق، بدونِ تخفیف، لینکِ ادامه‌ی همان سفارش
+        link = _pay_link(order) or rec.get("recover_url") or ""
+        return "\n".join([
+            f"سلام {name} عزیز 🌹",
+            f"از {config.SHOP_NAME} مزاحمتون شدم. دیدیم خریدتون از «{product}» نیمه‌کاره موند و پرداخت کامل نشد 😊",
+            "",
+            "هیچ نگران نباشید — هر وقت خواستید با یک کلیک همون‌جا که بودید ادامه بدید:",
+            f"🛍️ ادامه‌ی خرید: {link}",
+            f"💳 مبلغِ سفارش: {_toman(full)} تومان",
+            "",
+            "اگه سوالی داشتید یا کمک خواستید، همین‌جا کنارتونیم 💛",
+            f"با احترام، تیمِ {config.SHOP_NAME}",
+        ])
+
+    # مرحله‌ی ۲ — کدِ تخفیف + مبلغِ پس از تخفیف
+    coupon = rec.get("coupon") or ""
+    pct = int(rec.get("coupon_percent") or 0)
+    exp = rec.get("expires_local") or ""
+    url = rec.get("recover_url") or _pay_link(order) or ""
     lines = [
         f"سلام {name} عزیز 🌹",
-        f"از {config.SHOP_NAME} مزاحمتون شدم. دیدیم خریدتون از «{product}» نیمه‌کاره موند و پرداخت کامل نشد 😊",
+        f"هنوز فرصت هست خریدتون از «{product}» رو کامل کنید 😊",
         "",
-        "هر وقت خواستید، با یک کلیک همون‌جا که بودید ادامه بدید:",
-        f"🛍️ ادامه‌ی خرید: {url}",
     ]
-    if coupon:
+    if coupon and pct:
+        try:
+            after = int(float(full)) * (100 - pct) // 100
+        except Exception:
+            after = full
         exp_s = f"، تا {exp}" if exp else ""
-        lines.append(f"🎁 و یک هدیه: کدِ تخفیفِ ویژه‌ی شما «{coupon}» ({int(pct)}٪{exp_s}) — با همین لینک خودکار اعمال می‌شود.")
-    lines.append(f"💳 مبلغِ سفارش: {_toman(rec.get('amount_due') or order.get('total'))} تومان")
+        lines += [
+            f"🎁 این‌بار یک هدیه هم براتون گذاشتیم: کدِ تخفیفِ «{coupon}» ({pct}٪{exp_s})",
+            f"🔗 با این لینک تخفیف خودکار اعمال می‌شه: {url}",
+            f"💳 مبلغِ پس از تخفیف: {_toman(after)} تومان",
+        ]
+    else:
+        lines += [
+            "هر وقت خواستید با یک کلیک ادامه بدید:",
+            f"🔗 {url}",
+            f"💳 مبلغِ سفارش: {_toman(full)} تومان",
+        ]
     lines += [
         "",
-        "اگه سوالی داشتید یا کمک خواستید، همین‌جا در خدمتیم 💛",
+        "خوشحال می‌شیم همراهیتون کنیم 💛",
         f"با احترام، تیمِ {config.SHOP_NAME}",
     ]
     return "\n".join(lines)
@@ -106,7 +142,7 @@ async def tick(app):
         try:
             orders += await woo.get("orders", {
                 "status": st, "per_page": 40, "after": after, "orderby": "date", "order": "desc",
-                "_fields": "id,status,date_created,total,billing,line_items",
+                "_fields": "id,status,date_created,total,order_key,billing,line_items",
             })
         except Exception as e:
             print(f"[recover] گرفتنِ سفارش‌های {st}: {e!r}")
@@ -139,9 +175,13 @@ async def tick(app):
         if rec.get("paid"):
             db.recovery_mark_paid(oid, rec.get("amount_due") or o.get("total"))
             continue
-        if not rec.get("recover_url"):
-            continue  # بدونِ لینکِ بازیابی پیام نفرست
-        text = _build_message(o, rec)
+        if stage == 1:
+            link_ok = bool(_pay_link(o) or rec.get("recover_url"))
+        else:  # مرحله‌ی ۲ فقط وقتی کوپن آماده است (وگرنه صبر کن تا کوپن بیاید)
+            link_ok = bool(rec.get("coupon") and rec.get("coupon_percent"))
+        if not link_ok:
+            continue
+        text = _build_message(o, rec, stage)
         is_test = config.RECOVERY_MODE == "test"
         target = config.RECOVERY_TEST_PHONE if is_test else phone
         key = f"rec:{oid}:{stage}" + (":test" if is_test else "")
