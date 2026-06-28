@@ -13,6 +13,7 @@ import config
 import crm
 import db
 import pipeline
+import recovery
 import reports
 import telegram_io
 import woo
@@ -297,8 +298,9 @@ async def run(app):
             await _maybe_leads(app)
             await _maybe_shift_summary(app)
             await _maybe_morning_worklist(app)  # «کارِ امروز» سرِ شیفت (و علامتِ ارسال)
-            if cycle % 5 == 0:  # یادآوری‌ها هر ~۵ دقیقه (نه هر دقیقه)
+            if cycle % 5 == 0:  # هر ~۵ دقیقه
                 await _maybe_due_reminders(app)
+                await recovery.tick(app)  # بازیابیِ پرداختِ ناموفق (خاموش تا RECOVERY_MODE ست شود)
             await reports.prewarm()  # کش را گرم نگه دار → گزارش‌های ادمین آنی
         except Exception as e:
             print(f"[poller] خطای سیکل: {e!r}")

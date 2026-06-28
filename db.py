@@ -42,6 +42,18 @@ def init():
     _conn.execute("CREATE TABLE IF NOT EXISTS sent_leads (order_id INTEGER PRIMARY KEY)")
     _conn.execute("CREATE TABLE IF NOT EXISTS due_sent (k TEXT PRIMARY KEY)")
     _conn.execute(
+        """CREATE TABLE IF NOT EXISTS recovery (
+            order_id   INTEGER PRIMARY KEY,
+            phone      TEXT,
+            created_ts REAL,
+            sent1_at   REAL,
+            sent2_at   REAL,
+            paid       INTEGER DEFAULT 0,
+            recovered  REAL DEFAULT 0,
+            updated_at REAL
+        )"""
+    )
+    _conn.execute(
         """CREATE TABLE IF NOT EXISTS lead_outcomes (
             id        INTEGER PRIMARY KEY AUTOINCREMENT,
             order_id  INTEGER,
@@ -121,6 +133,63 @@ def crm_actions_since(since_ts):
             (since_ts,),
         )
         return cur.fetchall()
+
+
+# ---------- بازیابیِ پرداختِ ناموفق ----------
+def recovery_row(order_id):
+    with _lock:
+        r = _conn.execute(
+            "SELECT order_id, phone, created_ts, sent1_at, sent2_at, paid, recovered FROM recovery WHERE order_id=?",
+            (order_id,),
+        ).fetchone()
+    if not r:
+        return None
+    keys = ("order_id", "phone", "created_ts", "sent1_at", "sent2_at", "paid", "recovered")
+    return dict(zip(keys, r))
+
+
+def recovery_ensure(order_id, phone, created_ts):
+    with _lock:
+        _conn.execute(
+            "INSERT OR IGNORE INTO recovery(order_id, phone, created_ts, updated_at) VALUES (?,?,?,?)",
+            (order_id, str(phone), created_ts, time.time()),
+        )
+        _conn.commit()
+
+
+def recovery_mark_sent(order_id, stage):
+    col = "sent1_at" if stage == 1 else "sent2_at"
+    with _lock:
+        _conn.execute(f"UPDATE recovery SET {col}=?, updated_at=? WHERE order_id=?",
+                      (time.time(), time.time(), order_id))
+        _conn.commit()
+
+
+def recovery_mark_paid(order_id, amount):
+    with _lock:
+        _conn.execute("UPDATE recovery SET paid=1, recovered=?, updated_at=? WHERE order_id=?",
+                      (float(amount or 0), time.time(), order_id))
+        _conn.commit()
+
+
+def recovery_active(since_ts):
+    """ردیف‌هایی که پیامی برایشان رفته، هنوز paid نشده‌اند و اخیرند — برای بازبینیِ پرداخت."""
+    with _lock:
+        cur = _conn.execute(
+            "SELECT order_id, phone FROM recovery WHERE paid=0 AND sent1_at IS NOT NULL AND created_ts>=?",
+            (since_ts,),
+        )
+        return cur.fetchall()
+
+
+def recovery_stats(since_ts):
+    with _lock:
+        r = _conn.execute(
+            "SELECT COUNT(*) , SUM(CASE WHEN sent1_at IS NOT NULL THEN 1 ELSE 0 END), "
+            "SUM(paid), SUM(recovered) FROM recovery WHERE created_ts>=?",
+            (since_ts,),
+        ).fetchone()
+    return {"orders": r[0] or 0, "messaged": r[1] or 0, "recovered_count": r[2] or 0, "recovered_amount": r[3] or 0}
 
 
 def get_meta(key):

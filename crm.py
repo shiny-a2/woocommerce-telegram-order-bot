@@ -86,6 +86,16 @@ async def viewed_products(phone, limit=20) -> list:
     return data.get("viewed", []) if isinstance(data, dict) else (data or [])
 
 
+async def recovery(order_id=None, phone=None) -> dict:
+    """دیتای بازیابیِ پرداختِ ناموفق: {found,status,paid,amount_due,coupon,coupon_percent,expires_local,recover_url}."""
+    params = {}
+    if order_id:
+        params["order_id"] = order_id
+    if phone:
+        params["phone"] = normalize_phone(phone)
+    return await asyncio.to_thread(_get_sync, "/recovery", params)
+
+
 async def new_leads(since_id=0, limit=50) -> dict:
     """لیدهای جدیدِ ثبت‌شده پس از since_id (مرتب بر اساس id صعودی).
 

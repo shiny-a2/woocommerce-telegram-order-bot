@@ -49,6 +49,26 @@ async def get(endpoint, params=None):
     return await asyncio.to_thread(_get_sync, endpoint, params)
 
 
+def _put_sync(endpoint, data):
+    resp = _client().put(endpoint, data)
+    resp.raise_for_status()
+    return resp.json()
+
+
+async def put(endpoint, data):
+    return await asyncio.to_thread(_put_sync, endpoint, data)
+
+
+def _post_sync(endpoint, data):
+    resp = _client().post(endpoint, data)
+    resp.raise_for_status()
+    return resp.json()
+
+
+async def post(endpoint, data):
+    return await asyncio.to_thread(_post_sync, endpoint, data)
+
+
 async def get_order(order_id: int):
     return await get(f"orders/{order_id}")
 
