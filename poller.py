@@ -126,5 +126,6 @@ async def run(app):
         await _poll_edits(app)
         await _maybe_daily(app)
         await _maybe_leads(app)
+        await reports.prewarm()  # کش را گرم نگه دار → گزارش‌های ادمین آنی
         cycle += 1
         await asyncio.sleep(config.POLL_INTERVAL_SECONDS)

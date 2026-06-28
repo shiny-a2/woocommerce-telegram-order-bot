@@ -157,21 +157,31 @@ def current_jmonth() -> int:
 
 # ---------- آمار و تحلیل ----------
 
-_orders_cache = {}  # (after,before) -> (ts, data)
-_CACHE_TTL = 120
+_orders_cache = {}  # (after_bucket, before_bucket) -> (ts, data, ttl)
 
 
 async def _orders_raw(start_dt, end_dt):
     after, before = start_dt.isoformat(), end_dt.isoformat()
-    key = (after[:16], before[:16])  # پایدار در بازه‌ی یک دقیقه (کش‌خور حتی برای بازه‌های جاری)
+    key = (after[:15], before[:15])  # سطلِ ~۱۰دقیقه‌ای (پایدار برای بازه‌های جاری)
     hit = _orders_cache.get(key)
-    if hit and time.time() - hit[0] < _CACHE_TTL:
+    if hit and time.time() - hit[0] < hit[2]:
         return hit[1]
     data = await woo.list_orders_in_range(after, before)
-    if len(_orders_cache) > 60:
+    today0 = _now().strftime("%Y-%m-%dT00:00")
+    ttl = 3600 if before < today0 else 600  # بازه‌ی کاملاً گذشته ثابت است → کشِ بلند
+    if len(_orders_cache) > 80:
         _orders_cache.clear()
-    _orders_cache[key] = (time.time(), data)
+    _orders_cache[key] = (time.time(), data, ttl)
     return data
+
+
+async def prewarm():
+    """کشِ گزارش‌های پرکاربرد (امروز/این هفته/این ماه) را گرم نگه می‌دارد تا کلیکِ ادمین آنی باشد."""
+    for s, e, _label in (_range_today(), _range_week(), _range_month()):
+        try:
+            await _orders_raw(s, e)
+        except Exception:
+            pass
 
 
 def _is_paid(o):
