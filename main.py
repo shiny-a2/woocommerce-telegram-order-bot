@@ -10,6 +10,7 @@ import os
 import sys
 import time
 
+from telegram import Update
 from telegram.ext import Application
 
 import clock
@@ -127,7 +128,12 @@ if __name__ == "__main__":
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            _build_app().run_polling(drop_pending_updates=True, stop_signals=None, close_loop=False)
+            _build_app().run_polling(
+                drop_pending_updates=True,
+                stop_signals=None,
+                close_loop=False,
+                allowed_updates=Update.ALL_TYPES,  # صریح: کلیک دکمه‌ها (callback_query) هم تحویل بگیر
+            )
         except KeyboardInterrupt:
             break
         except BaseException as e:

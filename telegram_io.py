@@ -300,10 +300,13 @@ async def _outcomes_report():
 
 
 async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    print(f"[cmd] /menu از {update.effective_user.id if update.effective_user else '?'}")
     if not _authorized(update):
+        print("[cmd] /menu — غیرمجاز")
         return
     context.user_data["awaiting_search"] = False
     await update.message.reply_text(_MENU_TITLE, reply_markup=_main_menu(), parse_mode=ParseMode.HTML)
+    print("[cmd] /menu — منو ارسال شد")
 
 
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -311,6 +314,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not q:
         return
     data = q.data or ""
+    print(f"[cb] دریافت: {data} از {q.from_user.id if q.from_user else '?'}")
     if data.startswith("lead:"):  # دکمه‌های پیگیری در گروه — برای همه‌ی اعضای تیم
         await _handle_lead(q)
         return
@@ -400,7 +404,16 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _, jy, jm = data.split(":")
             await q.edit_message_text(await reports.report_jmonth(int(jy), int(jm)), reply_markup=_back_kb())
     except Exception as e:
-        await q.edit_message_text(f"خطا در گزارش: {e}", reply_markup=_back_kb())
+        if "not modified" in str(e).lower():  # محتوای یکسان — بی‌خطر، همان گزارش از قبل نمایش داده شده
+            print(f"[cb] بدون تغییر: {data}")
+        else:
+            print(f"[cb] خطا: {data} -> {e!r}")
+            try:
+                await q.edit_message_text(f"خطا در گزارش: {e}", reply_markup=_back_kb())
+            except Exception:
+                pass
+    else:
+        print(f"[cb] انجام شد: {data}")
 
 
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
