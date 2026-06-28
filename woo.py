@@ -33,7 +33,8 @@ def _client():
             consumer_secret=config.WOO_CS,
             version="wc/v3",
             timeout=30,
-            query_string_auth=True,
+            # کلید/سکرت در هدرِ Basic می‌رود نه در URL — تا در خطاها/لاگ لو نرود
+            query_string_auth=False,
         )
     return _api
 

@@ -63,13 +63,11 @@ async def _maybe_daily(app):
     if db.get_meta("last_daily") == today:  # امروز قبلاً فرستاده شده
         return
     try:
-        await app.bot.send_message(
-            chat_id=config.TELEGRAM_GROUP_ID, text=await reports.daily_summary_text()
-        )
+        await telegram_io.send_to_managers(app, await reports.daily_summary_text())
         db.set_meta("last_daily", today)
-        print("[daily] خلاصه‌ی فروش دیروز ارسال شد.")
+        print("[daily] خلاصه‌ی فروش دیروز به مدیران ارسال شد.")
     except Exception as e:
-        print(f"[daily] ارسال خلاصه ناموفق بود: {e}")
+        print(f"[daily] ارسال خلاصه ناموفق بود: {e!r}")
 
 
 async def _maybe_leads(app):
@@ -97,16 +95,12 @@ async def _maybe_shift_summary(app):
     today = now.strftime("%Y-%m-%d")
     if db.get_meta("last_shift") == today:
         return
-    group = telegram_io._followup_group()
-    if not group:
-        db.set_meta("last_shift", today)  # بدونِ گروه هم علامت بزن تا هر دقیقه تلاش نشود
-        return
-    try:
-        await app.bot.send_message(group, text=telegram_io._shift_summary_text(), parse_mode="HTML")
+    try:  # عملکردِ اپراتورها فقط برای مدیران (نه گروهِ تیم)
+        await telegram_io.send_to_managers(app, telegram_io._shift_summary_text(), parse_mode="HTML")
         db.set_meta("last_shift", today)
-        print("[shift] جمع‌بندیِ پایانِ شیفت ارسال شد.")
+        print("[shift] جمع‌بندیِ پایانِ شیفت به مدیران ارسال شد.")
     except Exception as e:
-        print(f"[shift] ارسالِ جمع‌بندی ناموفق بود: {e}")
+        print(f"[shift] ارسالِ جمع‌بندی ناموفق بود: {e!r}")
 
 
 def _recent_due(due):

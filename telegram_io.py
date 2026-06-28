@@ -234,13 +234,28 @@ def _followup_group():
     return int(db.get_meta("followup_group") or config.FOLLOWUP_GROUP_ID or 0)
 
 
-# ---------- CRM (فاز ۱ — خواندن) ----------
+async def send_to_managers(app, text, parse_mode=None):
+    """گزارش‌های مدیریتی فقط به مدیران: REPORTS_CHAT_ID، وگرنه پیویِ تک‌تکِ ادمین‌ها."""
+    if config.REPORTS_CHAT_ID:
+        try:
+            await app.bot.send_message(config.REPORTS_CHAT_ID, text, parse_mode=parse_mode)
+        except Exception as e:
+            print(f"[managers] ارسال به REPORTS_CHAT_ID ناموفق: {e!r}")
+        return
+    for uid in config.ADMIN_USER_IDS:
+        try:
+            await app.bot.send_message(uid, text, parse_mode=parse_mode)
+        except Exception as e:
+            print(f"[managers] ارسال به {uid} ناموفق: {e!r}")
+
+
+# ---------- CRM (تیمِ فروش: ادمین‌ها یا گروهِ پیگیری) ----------
 def _crm_can_read(q) -> bool:
-    """خواندنِ CRM: ادمین‌ها همه‌جا؛ یا اعضای گروهِ پیگیری/گروهِ اصلی."""
+    """دسترسیِ CRM: ادمین‌ها همه‌جا؛ یا اعضای گروهِ پیگیری. (گروهِ اصلی نه.)"""
     if q.from_user and q.from_user.id in config.ADMIN_USER_IDS:
         return True
     chat_id = q.message.chat_id if q.message else 0
-    return chat_id in (_followup_group(), config.TELEGRAM_GROUP_ID)
+    return chat_id == _followup_group()
 
 
 def _actor_name(user) -> str:
@@ -433,7 +448,7 @@ async def cmd_crm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     chat = update.effective_chat
     print(f"[cmd] /crm از {update.effective_user.id if update.effective_user else '?'} در چت {chat.id if chat else '?'} args={context.args}")
-    allowed = _authorized(update) or (chat and chat.id in (_followup_group(), config.TELEGRAM_GROUP_ID))
+    allowed = _authorized(update) or (chat and chat.id == _followup_group())
     if not allowed:
         return
     if not crm.enabled():
@@ -623,6 +638,9 @@ async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     if not msg or not _authorized(update):
         return
+    if update.effective_chat and update.effective_chat.type != "private":
+        await msg.reply_text("🔒 منوی مدیریت فقط در چتِ خصوصی با ربات کار می‌کند.")
+        return
     context.user_data["awaiting_search"] = False
     await msg.reply_text(_MENU_TITLE, reply_markup=_main_menu(), parse_mode=ParseMode.HTML)
 
@@ -644,6 +662,9 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if not q.from_user or q.from_user.id not in config.ADMIN_USER_IDS:
         await q.answer("اجازه‌ی دسترسی ندارید.", show_alert=True)
+        return
+    if q.message and q.message.chat and q.message.chat.type != "private":  # گزارش‌ها فقط در پیوی
+        await q.answer("🔒 گزارش‌ها فقط در چتِ خصوصی با ربات.", show_alert=True)
         return
     await q.answer()
     if data != "search":
@@ -733,7 +754,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             print(f"[cb] خطا: {data} -> {e!r}")
             try:
-                await q.edit_message_text(f"خطا در گزارش: {e}", reply_markup=_back_kb())
+                await q.edit_message_text("⚠️ خطا در تهیه‌ی گزارش؛ بعداً دوباره امتحان کن.", reply_markup=_back_kb())
             except Exception:
                 pass
     else:
@@ -757,7 +778,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if is_site or is_prod or is_fu or is_note:
             uid = update.effective_user.id if update.effective_user else 0
             chat_id = update.effective_chat.id if update.effective_chat else 0
-            if not (uid in config.ADMIN_USER_IDS or chat_id in (_followup_group(), config.TELEGRAM_GROUP_ID)):
+            if not (uid in config.ADMIN_USER_IDS or chat_id == _followup_group()):
                 return
             m = re.search(r"(?<!\d)0\d{10}(?!\d)", rep_text)
             val = (msg.text or "").strip()
@@ -801,7 +822,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         orders = await woo.search_orders(query, per_page=10)
     except Exception as e:
-        await update.message.reply_text(f"خطا در جستجو: {e}")
+        print(f"[search] {e!r}")
+        await msg.reply_text("⚠️ خطا در جستجو؛ بعداً دوباره امتحان کن.")
         return
     if not orders:
         await update.message.reply_text("سفارشی با این مشخصات پیدا نشد.", reply_markup=_back_kb())
@@ -814,7 +836,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             photos, caption, _ = await pipeline.build_order_card(o)
             await send_card(context.application, chat_id, photos, caption)
         except Exception as e:
-            await update.message.reply_text(f"خطا در نمایش سفارش {o.get('id')}: {e}")
+            print(f"[search] نمایش سفارش {o.get('id')}: {e!r}")
+            await msg.reply_text(f"⚠️ نمایشِ سفارش {o.get('id')} ناموفق بود.")
         await asyncio.sleep(1)
 
     note = f"✅ {len(orders)} سفارش یافت شد."
@@ -827,13 +850,17 @@ async def cmd_range(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
     if not msg or not _authorized(update):
         return
+    if update.effective_chat and update.effective_chat.type != "private":
+        await msg.reply_text("🔒 گزارش‌ها فقط در چتِ خصوصی با ربات.")
+        return
     if len(context.args) != 2:
         await msg.reply_text("فرمت درست: /range ۱۴۰۳/۰۱/۰۱ ۱۴۰۳/۰۱/۳۱")
         return
     try:
         await msg.reply_text(await reports.report("range", context.args))
     except Exception as e:
-        await msg.reply_text(f"خطا: {e}")
+        print(f"[range] {e!r}")
+        await msg.reply_text("⚠️ خطا در تهیه‌ی گزارش؛ بعداً دوباره امتحان کن.")
 
 
 async def cmd_setfollowup(update: Update, context: ContextTypes.DEFAULT_TYPE):

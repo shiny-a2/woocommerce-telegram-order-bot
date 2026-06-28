@@ -44,6 +44,8 @@ TELEGRAM_BOT_TOKEN = _get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_GROUP_ID = _int("TELEGRAM_GROUP_ID", 0)
 FOLLOWUP_GROUP_ID = _int("FOLLOWUP_GROUP_ID", 0)  # گروهِ پیگیریِ سفارش‌های رهاشده
 ADMIN_USER_IDS = _id_list("ADMIN_USER_IDS")
+# مقصدِ گزارش‌های مدیریتی (خلاصهٔ فروش/جمع‌بندیِ شیفت). خالی = پیویِ تک‌تکِ ادمین‌ها
+REPORTS_CHAT_ID = _int("REPORTS_CHAT_ID", 0)
 
 # ---------- ووکامرس ----------
 WOO_URL = (_get("WOO_URL", "") or "").rstrip("/")
