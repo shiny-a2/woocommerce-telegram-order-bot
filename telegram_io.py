@@ -386,14 +386,12 @@ async def _handle_crm(q, context):
     if action == "viewed":  # محصولاتِ مشاهده‌شده از CRM
         await q.answer("در حال دریافت…")
         try:
-            viewed = await crm.viewed_products(phone)
+            body = _viewed_text(phone, await crm.viewed_products(phone))
         except Exception as e:
             print(f"[crm] viewed {phone}: {e!r}")
-            await q.answer("بخشِ «محصولاتِ دیده‌شده» هنوز سمتِ CRM فعال نیست.", show_alert=True)
-            return
+            body = "👁️ بخشِ «محصولاتِ دیده‌شده» هنوز سمتِ CRM فعال نیست."
         try:
-            await q.edit_message_text(_viewed_text(phone, viewed), parse_mode=ParseMode.HTML,
-                                      reply_markup=_back_only_kb(phone))
+            await q.edit_message_text(body, parse_mode=ParseMode.HTML, reply_markup=_back_only_kb(phone))
         except Exception as e:
             if "not modified" not in str(e).lower():
                 print(f"[crm] viewed edit: {e!r}")
@@ -401,14 +399,12 @@ async def _handle_crm(q, context):
     if action == "recommend":  # پیشنهادِ محصول از موتورِ CRM
         await q.answer("در حال دریافت پیشنهادها…")
         try:
-            items = await crm.recommend(phone)
+            body = _recommend_text(phone, await crm.recommend(phone))
         except Exception as e:
             print(f"[crm] recommend {phone}: {e!r}")
-            await q.answer("بخشِ «پیشنهادِ محصول» هنوز سمتِ CRM فعال نیست.", show_alert=True)
-            return
+            body = "🎯 بخشِ «پیشنهادِ محصول» هنوز سمتِ CRM فعال نیست."
         try:
-            await q.edit_message_text(_recommend_text(phone, items), parse_mode=ParseMode.HTML,
-                                      reply_markup=_back_only_kb(phone))
+            await q.edit_message_text(body, parse_mode=ParseMode.HTML, reply_markup=_back_only_kb(phone))
         except Exception as e:
             if "not modified" not in str(e).lower():
                 print(f"[crm] recommend edit: {e!r}")
@@ -689,7 +685,8 @@ async def _newlead_card_after(phone):
     lead = prof.get("lead") or {}
     c = prof.get("contact") or {}
     name = (f"{c.get('first_name', '')} {c.get('last_name', '')}".strip()
-            or f"{lead.get('first_name', '')} {lead.get('last_name', '')}".strip() or "—")
+            or f"{lead.get('first_name', '')} {lead.get('last_name', '')}".strip()
+            or c.get("name") or lead.get("name") or "—")
     emoji = crm_view._STATUS_EMOJI.get(lead.get("status"), "🔘")
     label = lead.get("status_label") or lead.get("status") or "جدید"
     L = [
