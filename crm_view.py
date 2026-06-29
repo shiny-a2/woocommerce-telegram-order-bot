@@ -139,8 +139,9 @@ def action_kb(phone: str) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("📝 ثبت یادداشت", callback_data=f"crm:note:{phone}"),
          InlineKeyboardButton("⏰ تعیین پیگیری", callback_data=f"crm:fu:{phone}")],
         [InlineKeyboardButton("📦 سفارش‌ها", callback_data=f"crm:orders:{phone}"),
-         InlineKeyboardButton("👁️ محصولاتِ دیده‌شده", callback_data=f"crm:viewed:{phone}")],
-        [InlineKeyboardButton("✏️ ویرایش نام", callback_data=f"crm:editname:{phone}")],
+         InlineKeyboardButton("👁️ دیده‌شده", callback_data=f"crm:viewed:{phone}")],
+        [InlineKeyboardButton("🎯 پیشنهادِ محصول", callback_data=f"crm:recommend:{phone}"),
+         InlineKeyboardButton("✏️ ویرایش نام", callback_data=f"crm:editname:{phone}")],
         [InlineKeyboardButton("🔄 بروزرسانی", callback_data=f"crm:refresh:{phone}"),
          InlineKeyboardButton("✖️ بستن", callback_data="crm:close")],
     ])

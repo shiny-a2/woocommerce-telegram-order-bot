@@ -86,6 +86,17 @@ async def viewed_products(phone, limit=20) -> list:
     return data.get("viewed", []) if isinstance(data, dict) else (data or [])
 
 
+async def recommend(phone, limit=8) -> list:
+    """محصولاتِ پیشنهادی برای مشتری (موتورِ پیشنهادِ CRM).
+
+    قالبِ موردِانتظار: {"ok":true,"items":[{product, product_id?, url?, price?, reason?}]}
+    """
+    data = await asyncio.to_thread(_get_sync, "/recommend", {"phone": normalize_phone(phone), "limit": limit})
+    if isinstance(data, dict):
+        return data.get("items") or data.get("recommend") or data.get("products") or []
+    return data or []
+
+
 async def recovery(order_id=None, phone=None) -> dict:
     """دیتای بازیابیِ پرداختِ ناموفق: {found,status,paid,amount_due,coupon,coupon_percent,expires_local,recover_url}."""
     params = {}

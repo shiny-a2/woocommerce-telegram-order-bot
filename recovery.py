@@ -43,6 +43,25 @@ async def _enqueue(phone, text, key):
     return await asyncio.to_thread(_enqueue_sync, phone, text, key)
 
 
+def _tx_status_sync(key):
+    """وضعیتِ یک پیام در صفِ یوزربات (sent / no_telegram / failed / optout / pending / None)."""
+    try:
+        r = requests.get(
+            config.TXOUT_URL + "/status",
+            params={"key": key},
+            headers={"X-Dash-Token": config.TXOUT_TOKEN},
+            timeout=8,
+        )
+        r.raise_for_status()
+        return r.json().get("status")
+    except Exception:
+        return None  # نامعلوم → محتاطانه ادامه بده (مرحله‌۲ را رد نکن)
+
+
+async def _tx_status(key):
+    return await asyncio.to_thread(_tx_status_sync, key)
+
+
 def _pay_link(order) -> str:
     """لینکِ ادامه‌ی پرداختِ همان سفارش (بدونِ تخفیف)."""
     key = order.get("order_key") or ""
@@ -173,6 +192,12 @@ async def tick(app):
         if not row["sent1_at"] and elapsed >= config.RECOVERY_FIRST_DELAY_MIN:
             stage = 1
         elif row["sent1_at"] and not row["sent2_at"] and (now_e - row["sent1_at"]) >= config.RECOVERY_SECOND_DELAY_H * 3600:
+            # اگر مرحله‌۱ اصلاً تحویل نشد (بی‌تلگرام/حریم‌خصوصی)، مرحله‌۲ بی‌فایده است → رد و پایان
+            st1 = await _tx_status(f"rec:{oid}:1" + (":test" if is_test else ""))
+            if st1 in ("no_telegram", "failed", "optout"):
+                db.recovery_mark_sent(oid, 2)  # علامتِ پایان تا دیگر پردازش نشود
+                print(f"[recover] سفارش {oid}: مرحله‌۱ {st1} → مرحله‌۲ رد شد (تحویل‌نشده).")
+                continue
             stage = 2
         if not stage or not within:
             continue

@@ -339,7 +339,10 @@ async def _handle_crm(q, context):
         return
 
     async def _refresh():
-        text, kb = await _crm_card(phone)
+        if _is_newlead(q.message):  # کارتِ لیدِ جدید را فشرده و در جا با وضعیتِ به‌روز رندر کن
+            text, kb = await _newlead_card_after(phone), _newlead_kb(phone)
+        else:
+            text, kb = await _crm_card(phone)
         try:
             await q.edit_message_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
         except Exception as e:
@@ -394,6 +397,21 @@ async def _handle_crm(q, context):
         except Exception as e:
             if "not modified" not in str(e).lower():
                 print(f"[crm] viewed edit: {e!r}")
+        return
+    if action == "recommend":  # پیشنهادِ محصول از موتورِ CRM
+        await q.answer("در حال دریافت پیشنهادها…")
+        try:
+            items = await crm.recommend(phone)
+        except Exception as e:
+            print(f"[crm] recommend {phone}: {e!r}")
+            await q.answer("بخشِ «پیشنهادِ محصول» هنوز سمتِ CRM فعال نیست.", show_alert=True)
+            return
+        try:
+            await q.edit_message_text(_recommend_text(phone, items), parse_mode=ParseMode.HTML,
+                                      reply_markup=_back_only_kb(phone))
+        except Exception as e:
+            if "not modified" not in str(e).lower():
+                print(f"[crm] recommend edit: {e!r}")
         return
     if action == "fu":  # منوی تعیینِ پیگیری
         await q.answer()
@@ -649,10 +667,58 @@ def _newlead_kb(phone: str) -> InlineKeyboardMarkup:
     p = crm.normalize_phone(phone or "")
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📞 تماس گرفتم", callback_data=f"crm:sst:{p}:called"),
-         InlineKeyboardButton("⏰ فردا پیگیری", callback_data=f"crm:setfu:{p}:1")],
-        [InlineKeyboardButton("✅ خرید کرد", callback_data=f"crm:sst:{p}:purchased"),
+         InlineKeyboardButton("✅ خرید کرد", callback_data=f"crm:sst:{p}:purchased")],
+        [InlineKeyboardButton("👁️ دیده‌شده‌ها", callback_data=f"crm:viewed:{p}"),
+         InlineKeyboardButton("🎯 پیشنهاد", callback_data=f"crm:recommend:{p}")],
+        [InlineKeyboardButton("⏰ فردا پیگیری", callback_data=f"crm:setfu:{p}:1"),
          InlineKeyboardButton("👤 کارت کامل", callback_data=f"crm:open:{p}")],
     ])
+
+
+def _is_newlead(msg) -> bool:
+    """آیا این پیام، کارتِ «لیدِ جدید» است؟ (برای بروزرسانیِ فشرده در جا)"""
+    return bool(msg and (msg.text or "").lstrip().startswith("🆕"))
+
+
+async def _newlead_card_after(phone):
+    """کارتِ فشردهٔ لیدِ جدید با وضعیتِ به‌روز (بعد از اقدام روی همان کارت)."""
+    try:
+        prof = await crm.get_profile(phone)
+    except Exception:
+        prof = {}
+    lead = prof.get("lead") or {}
+    c = prof.get("contact") or {}
+    name = (f"{c.get('first_name', '')} {c.get('last_name', '')}".strip()
+            or f"{lead.get('first_name', '')} {lead.get('last_name', '')}".strip() or "—")
+    emoji = crm_view._STATUS_EMOJI.get(lead.get("status"), "🔘")
+    label = lead.get("status_label") or lead.get("status") or "جدید"
+    L = [
+        "🆕 <b>لیدِ جدید</b>",
+        f"👤 {html.escape(str(name))} — <code>{html.escape(phone)}</code>",
+        f"{emoji} وضعیت: <b>{html.escape(str(label))}</b>",
+    ]
+    if lead.get("assigned_name"):
+        L.append(f"🧑‍💼 مسئول: {html.escape(str(lead.get('assigned_name')))}")
+    if lead.get("next_follow_up"):
+        L.append(f"⏰ پیگیریِ بعدی: {html.escape(str(lead.get('next_follow_up')))}")
+    return "\n".join(L)
+
+
+def _recommend_text(phone: str, items: list) -> str:
+    if not items:
+        return f"🎯 فعلاً پیشنهادی برای <code>{html.escape(phone)}</code> آماده نیست."
+    L = [f"🎯 <b>پیشنهادِ محصول</b> — <code>{html.escape(phone)}</code>", ""]
+    for it in items[:12]:
+        name = it.get("product") or it.get("name") or "—"
+        line = f"• <b>{html.escape(str(name))}</b>"
+        if it.get("price"):
+            line += f" — {_toman(it.get('price'))} ت"
+        L.append(line)
+        if it.get("reason"):
+            L.append(f"   <i>{html.escape(str(it.get('reason')))}</i>")
+        if it.get("url"):
+            L.append(f"   {html.escape(str(it.get('url')))}")
+    return "\n".join(L)
 
 
 def _back_only_kb(phone: str) -> InlineKeyboardMarkup:
