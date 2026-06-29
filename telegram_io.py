@@ -706,15 +706,15 @@ def _recommend_text(phone: str, items: list) -> str:
         return f"🎯 فعلاً پیشنهادی برای <code>{html.escape(phone)}</code> آماده نیست."
     L = [f"🎯 <b>پیشنهادِ محصول</b> — <code>{html.escape(phone)}</code>", ""]
     for it in items[:12]:
-        name = it.get("product") or it.get("name") or "—"
-        line = f"• <b>{html.escape(str(name))}</b>"
+        name = html.escape(str(it.get("product") or it.get("name") or "—"))
+        url = it.get("url")
+        title = f'<a href="{html.escape(str(url))}">{name}</a>' if url else f"<b>{name}</b>"
+        line = f"• {title}"
         if it.get("price"):
             line += f" — {_toman(it.get('price'))} ت"
-        L.append(line)
         if it.get("reason"):
-            L.append(f"   <i>{html.escape(str(it.get('reason')))}</i>")
-        if it.get("url"):
-            L.append(f"   {html.escape(str(it.get('url')))}")
+            line += f"  <i>({html.escape(str(it.get('reason')))})</i>"
+        L.append(line)
     return "\n".join(L)
 
 
