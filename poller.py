@@ -22,6 +22,24 @@ import woo
 _BIZ_START, _BIZ_END = 10, 19
 _RT_WINDOW = datetime.timedelta(hours=12)  # فقط ناموفق/لغوِ تازه (نه بک‌لاگِ قدیمی هنگام ری‌استارت)
 _DUE_WINDOW = datetime.timedelta(days=14)  # یادآوری فقط برای پیگیری‌های اخیر، نه انبارِ قدیمی
+_THU_END = 14  # پنجشنبه شیفت تا ۱۴؛ جمعه تعطیل؛ شنبه–چهارشنبه تا _BIZ_END
+
+
+def _shift_end_hour(now):
+    """ساعتِ پایانِ شیفتِ امروز (تهران)؛ None یعنی امروز تعطیل است (جمعه)."""
+    wd = (now.weekday() + 2) % 7  # شنبه=۰، یکشنبه=۱، … پنجشنبه=۵، جمعه=۶
+    if wd == 6:            # جمعه
+        return None
+    if wd == 5:            # پنجشنبه
+        return _THU_END
+    return _BIZ_END        # شنبه تا چهارشنبه
+
+
+def _in_shift(now=None) -> bool:
+    """داخلِ شیفتِ کاری؟ شنبه–چهارشنبه ۱۰–۱۹، پنجشنبه ۱۰–۱۴، جمعه تعطیل."""
+    now = now or clock.tehran_now()
+    end = _shift_end_hour(now)
+    return end is not None and _BIZ_START <= now.hour < end
 
 
 def _recent(date_created):
@@ -74,7 +92,7 @@ async def _maybe_daily(app):
 async def _maybe_leads(app):
     """شروعِ شیفت (پنجره‌ی ۱۰ تا ۱۹): ناموفق/لغوی‌های شب را به گروه پیگیری بفرست."""
     now = clock.tehran_now()
-    if not (10 <= now.hour < _BIZ_END):  # فقط در شیفت (سکوتِ بیرونِ شیفت حفظ می‌شود)
+    if not _in_shift(now):  # فقط در شیفت (سکوتِ بیرونِ شیفت حفظ می‌شود)
         return
     today = now.strftime("%Y-%m-%d")
     if db.get_meta("last_leads") == today:
@@ -91,7 +109,8 @@ async def _maybe_leads(app):
 async def _maybe_shift_summary(app):
     """راس ساعت ۱۹ تهران (پایانِ شیفت): جمع‌بندیِ فعالیتِ اپراتورها به گروهِ پیگیری."""
     now = clock.tehran_now()
-    if now.hour < _BIZ_END:  # از ۱۹ به بعد تا نیمه‌شب (مقاوم به ری‌استارت)
+    end = _shift_end_hour(now)
+    if end is None or now.hour < end:  # روزِ تعطیل یا هنوز پیش از پایانِ شیفت
         return
     today = now.strftime("%Y-%m-%d")
     if db.get_meta("last_shift") == today:
@@ -132,7 +151,7 @@ async def _maybe_morning_worklist(app):
     جدیدِ حینِ روز به‌صورتِ تکی می‌آیند).
     """
     now = clock.tehran_now()
-    if not (_BIZ_START <= now.hour < _BIZ_END):
+    if not _in_shift(now):
         return
     today = now.strftime("%Y-%m-%d")
     if db.get_meta("last_worklist") == today:
@@ -170,7 +189,7 @@ async def _maybe_due_reminders(app):
     صبحِ شروعِ شیفت همه‌ی سررسیدهای شب و سرِ‌تایم هر یادآوری همان موقع می‌آید.
     """
     now = clock.tehran_now()
-    if not (_BIZ_START <= now.hour < _BIZ_END):  # سکوتِ بیرونِ شیفت
+    if not _in_shift(now):  # سکوتِ بیرونِ شیفت
         return
     if not telegram_io._followup_group() or not crm.enabled():
         return
@@ -212,7 +231,7 @@ async def _poll_new_leads(app):
     if db.get_meta("crm_newlead_on") != "1":
         return
     now = clock.tehran_now()
-    if not (_BIZ_START <= now.hour < _BIZ_END):
+    if not _in_shift(now):
         return
     if not telegram_io._followup_group() or not crm.enabled():
         return
