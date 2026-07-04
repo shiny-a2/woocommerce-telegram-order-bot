@@ -27,7 +27,7 @@ def init():
             posted_at      REAL
         )"""
     )
-    for col in ("status TEXT", "stock_location TEXT", "caption TEXT"):
+    for col in ("status TEXT", "stock_location TEXT", "caption TEXT", "date_modified TEXT"):
         try:
             _conn.execute(f"ALTER TABLE orders ADD COLUMN {col}")
         except sqlite3.OperationalError:
@@ -72,6 +72,18 @@ def init():
             user_id   INTEGER,
             user_name TEXT,
             ts        REAL
+        )"""
+    )
+    _conn.execute(
+        """CREATE TABLE IF NOT EXISTS wc_sync_log (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            endpoint     TEXT,
+            pages        INTEGER,
+            items        INTEGER,
+            requests     INTEGER,
+            duration_ms  INTEGER,
+            error        TEXT,
+            ts           REAL
         )"""
     )
     _conn.commit()
@@ -266,3 +278,38 @@ def tracked_orders(since_ts: float):
             (since_ts,),
         )
         return [r[0] for r in cur.fetchall()]
+
+
+def set_order_modified(order_id, date_modified):
+    with _lock:
+        _conn.execute("UPDATE orders SET date_modified=? WHERE order_id=?", (date_modified, order_id))
+        _conn.commit()
+
+
+def orders_modified_map():
+    """{order_id: date_modified} برای سفارش‌های پست‌شده — برای تشخیصِ تغییر بدونِ فچِ detail."""
+    with _lock:
+        cur = _conn.execute("SELECT order_id, date_modified FROM orders WHERE message_id IS NOT NULL")
+        return {r[0]: r[1] for r in cur.fetchall()}
+
+
+def log_wc_sync(endpoint, pages, items, requests, duration, error=""):
+    with _lock:
+        _conn.execute(
+            "INSERT INTO wc_sync_log(endpoint,pages,items,requests,duration_ms,error,ts) VALUES (?,?,?,?,?,?,?)",
+            (endpoint, int(pages or 0), int(items or 0), int(requests or 0), int((duration or 0) * 1000), error or "", time.time()),
+        )
+        # فقط ۵۰۰ ردیفِ آخر نگه‌دار
+        _conn.execute("DELETE FROM wc_sync_log WHERE id < (SELECT MAX(id)-500 FROM wc_sync_log)")
+        _conn.commit()
+
+
+def wc_sync_summary(since_ts):
+    """جمعِ درخواست‌ها/آیتم‌ها/خطاها از since_ts — برای نمایشِ نرخ."""
+    with _lock:
+        r = _conn.execute(
+            "SELECT COUNT(*), SUM(requests), SUM(items), SUM(CASE WHEN error<>'' THEN 1 ELSE 0 END) "
+            "FROM wc_sync_log WHERE ts>=?",
+            (since_ts,),
+        ).fetchone()
+    return {"syncs": r[0] or 0, "requests": r[1] or 0, "items": r[2] or 0, "errors": r[3] or 0}

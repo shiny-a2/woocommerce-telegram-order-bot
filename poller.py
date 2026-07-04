@@ -16,6 +16,7 @@ import pipeline
 import recovery
 import reports
 import telegram_io
+import wc_sync
 import woo
 
 # ساعت کاری تهران برای ارسال لحظه‌ایِ لیدها (۱۰ تا قبل از ۱۹)
@@ -295,12 +296,64 @@ async def _poll_orders(app):
 
 
 async def _poll_edits(app):
+    if config.WC_INCREMENTAL:
+        await _poll_edits_incremental(app)
+    else:
+        await _poll_edits_full(app)
+
+
+async def _poll_edits_full(app):
+    """مسیرِ قدیمی (full-scan) — فقط با WC_INCREMENTAL=off؛ به‌عنوانِ fallback نگه داشته شده."""
     since = time.time() - config.NOTE_LOOKBACK_DAYS * 86400
     for oid in db.tracked_orders(since):
         try:
             await pipeline.rebuild_and_edit(app, oid)
         except Exception as e:
             print(f"[poller] بازبینی سفارش {oid} شکست خورد: {e}")
+
+
+async def _maybe_reconcile(app):
+    """آشتیِ کامل روزی یک‌بار در ساعتِ کم‌ترافیک (۳–۵ صبح): full-scan برای گرفتنِ هر تغییرِ جاافتاده (تورِ ایمنی)."""
+    now = clock.tehran_now()
+    if not (3 <= now.hour < 5):
+        return
+    today = now.strftime("%Y-%m-%d")
+    if db.get_meta("last_reconcile") == today:
+        return
+    db.set_meta("last_reconcile", today)
+    print("[wc] آشتیِ روزانه (full-scan) — ساعتِ کم‌ترافیک…")
+    try:
+        await _poll_edits_full(app)  # با rate-limiter محافظت می‌شود
+    except Exception as e:
+        print(f"[wc] آشتیِ روزانه خطا: {e!r}")
+    print("[wc] آشتیِ روزانه تمام شد.")
+
+
+async def _poll_edits_incremental(app):
+    """فقط سفارش‌هایی که date_modified‌شان عوض شده یا خیلی تازه‌اند rebuild می‌شوند (نه فچِ همه)."""
+    since = time.time() - config.NOTE_LOOKBACK_DAYS * 86400
+    tracked = db.tracked_orders(since)
+    if not tracked:
+        return
+    changed = await wc_sync.changed_since_last()  # {oid: date_modified} یا None اگر sync ناموفق
+    if changed is None:
+        return  # سایت در دسترس نبود → این دور رد کن، دورِ بعد دوباره
+    stored = db.orders_modified_map()
+    fresh = set(db.tracked_orders(time.time() - config.WC_EDIT_FRESH_HOURS * 3600))  # تازه‌ها → نوت‌گیری
+    edited = 0
+    for oid in tracked:
+        dm = changed.get(oid)
+        if not ((oid in fresh) or (dm is not None and dm != stored.get(oid))):
+            continue  # نه تغییر کرده نه تازه → فچِ detail نکن
+        try:
+            await pipeline.rebuild_and_edit(app, oid)
+            if dm:
+                db.set_order_modified(oid, dm)
+            edited += 1
+        except Exception as e:
+            print(f"[poller] بازبینی سفارش {oid} شکست خورد: {e}")
+    if edited:
+        print(f"[wc] {edited} سفارش بازبینی شد (از {len(tracked)} ردیابی‌شده) — بدونِ full-scan.")
 
 
 async def run(app):
@@ -314,17 +367,23 @@ async def run(app):
             await _poll_new_leads(app)
             await _poll_edits(app)
             await _maybe_daily(app)
+            await _maybe_reconcile(app)  # آشتیِ کامل روزی یک‌بار (۳–۵ صبح)
             await _maybe_leads(app)
             await _maybe_shift_summary(app)
             await _maybe_morning_worklist(app)  # «کارِ امروز» سرِ شیفت (و علامتِ ارسال)
             if cycle % 5 == 0:  # هر ~۵ دقیقه
                 await _maybe_due_reminders(app)
-                try:
-                    await recovery.tick(app)  # بازیابیِ پرداختِ ناموفق (خاموش تا RECOVERY_MODE ست شود)
-                except Exception as e:
-                    print(f"[recover] tick خطا: {e!r}")
+            try:
+                await recovery.tick(app)  # هر چرخه (~۱ دقیقه) → شلیکِ به‌موقعِ بازیابی، بدونِ لگ
+            except Exception as e:
+                print(f"[recover] tick خطا: {e!r}")
             await reports.prewarm()  # کش را گرم نگه دار → گزارش‌های ادمین آنی
         except Exception as e:
             print(f"[poller] خطای سیکل: {e!r}")
+        if cycle % 10 == 0:  # هر ~۱۰ دقیقه: نرخِ درخواستِ ووکامرس (برای رصدِ فشار روی سایت)
+            _r = woo.req_count()
+            _p = int(db.get_meta("wc_req_mark") or _r)
+            print(f"[wc] ~{_r - _p} درخواستِ ووکامرس در ~۱۰ دقیقه ({(_r - _p) / 10:.1f}/دقیقه)")
+            db.set_meta("wc_req_mark", _r)
         cycle += 1
         await asyncio.sleep(config.POLL_INTERVAL_SECONDS)

@@ -2,12 +2,85 @@
 from __future__ import annotations
 
 import asyncio
+import random
+import time as _time
 
+import requests
 from woocommerce import API
 
 import config
 
 _api = None
+_req_count = 0  # شمارنده‌ی کلِ درخواست‌های ووکامرس (برای لاگِ نرخ)
+
+
+def req_count() -> int:
+    return _req_count
+
+# ---------- نرخِ درخواست + circuit-breaker + شمارش (شفاف؛ رفتارِ فراخوان‌ها تغییر نمی‌کند) ----------
+_MAX_CONC = int(getattr(config, "WOO_MAX_CONCURRENCY", 3))          # concurrencyِ پایین به سایت
+_RETRY_STATUS = {0, 429, 500, 502, 503, 504}                        # 0 = خطای شبکه/تایم‌اوت
+_BREAKER_TRIP = int(getattr(config, "WOO_BREAKER_FAILS", 5))        # چند شکستِ پشت‌سرهم → باز شدنِ بریکر
+_BREAKER_COOLDOWN = int(getattr(config, "WOO_BREAKER_COOLDOWN_S", 180))
+_sem = None
+_breaker = {"fails": 0, "open_until": 0.0}
+_counters = {"req": 0, "retries": 0, "breaker_skips": 0, "by_status": {}, "since": _time.time()}
+
+
+def _semaphore():
+    global _sem
+    if _sem is None:
+        _sem = asyncio.Semaphore(_MAX_CONC)
+    return _sem
+
+
+def stats_snapshot(reset=True):
+    """آمارِ درخواست‌های Woo از آخرین snapshot (برای logging نرخِ req/min)."""
+    now = _time.time()
+    snap = dict(_counters)
+    snap["window_s"] = round(now - _counters["since"], 1)
+    snap["by_status"] = dict(_counters["by_status"])
+    if reset:
+        _counters.update({"req": 0, "retries": 0, "breaker_skips": 0, "by_status": {}, "since": now})
+    return snap
+
+
+def breaker_open():
+    return _time.time() < _breaker["open_until"]
+
+
+async def _call(fn, *args):
+    """هر درخواستِ ووکامرس: concurrency-limit + retry/backoff روی 429/5xx/تایم‌اوت + circuit-breaker + شمارش.
+
+    رفتارِ خروجی مثلِ قبل است؛ روی خطای غیرقابلِ‌retry همان استثنا بالا می‌رود.
+    """
+    if breaker_open():
+        _counters["breaker_skips"] += 1
+        raise RuntimeError("woo_circuit_open")  # مدار باز → به سایت فشار نده
+    retries = int(getattr(config, "WC_MAX_RETRY", 3))
+    async with _semaphore():
+        last = None
+        for attempt in range(retries + 1):
+            try:
+                r = await asyncio.to_thread(fn, *args)
+                _counters["req"] += 1
+                _breaker["fails"] = 0
+                return r
+            except Exception as e:
+                last = e
+                code = (e.response.status_code
+                        if isinstance(e, requests.exceptions.HTTPError) and e.response is not None else 0)
+                _counters["by_status"][code] = _counters["by_status"].get(code, 0) + 1
+                if code not in _RETRY_STATUS or attempt >= retries:
+                    break
+                _counters["retries"] += 1
+                await asyncio.sleep(min(8.0, 0.5 * (2 ** attempt)) + random.random() * 0.3)
+        _breaker["fails"] += 1
+        if _breaker["fails"] >= _BREAKER_TRIP:
+            _breaker["open_until"] = _time.time() + _BREAKER_COOLDOWN
+            _breaker["fails"] = 0
+            print(f"[wc] circuit-breaker باز شد — {_BREAKER_COOLDOWN}s استراحت (سایت فشار نگیرد).")
+        raise last
 
 # جدول کامل استان‌های ایران (کد افزونه → نام). نسخه‌ی زنده از خود ووکامرس
 # با load_states() گرفته می‌شود؛ این جدول فقط پشتیبان است اگر API در دسترس نبود.
@@ -40,13 +113,15 @@ def _client():
 
 
 def _get_sync(endpoint, params=None):
+    global _req_count
+    _req_count += 1
     resp = _client().get(endpoint, params=params or {})
     resp.raise_for_status()
     return resp.json()
 
 
 async def get(endpoint, params=None):
-    return await asyncio.to_thread(_get_sync, endpoint, params)
+    return await _call(_get_sync, endpoint, params)
 
 
 def _put_sync(endpoint, data):
@@ -56,7 +131,7 @@ def _put_sync(endpoint, data):
 
 
 async def put(endpoint, data):
-    return await asyncio.to_thread(_put_sync, endpoint, data)
+    return await _call(_put_sync, endpoint, data)
 
 
 def _post_sync(endpoint, data):
@@ -66,15 +141,27 @@ def _post_sync(endpoint, data):
 
 
 async def post(endpoint, data):
-    return await asyncio.to_thread(_post_sync, endpoint, data)
+    return await _call(_post_sync, endpoint, data)
 
 
 async def get_order(order_id: int):
     return await get(f"orders/{order_id}")
 
 
+_product_cache = {}  # product_id -> (data, ts) — کشِ کوتاهِ محصول (تا موجودی خیلی کهنه نشود)
+_PRODUCT_TTL = int(getattr(config, "WC_PRODUCT_TTL_S", 300))  # ۵ دقیقه
+
+
 async def get_product(product_id: int):
-    return await get(f"products/{product_id}")
+    now = _time.time()
+    hit = _product_cache.get(product_id)
+    if hit and now - hit[1] < _PRODUCT_TTL:
+        return hit[0]
+    data = await get(f"products/{product_id}")
+    if len(_product_cache) > 500:
+        _product_cache.clear()
+    _product_cache[product_id] = (data, now)
+    return data
 
 
 async def get_notes(order_id: int):
@@ -101,10 +188,38 @@ _RANGE_FIELDS = "id,number,status,total,payment_method_title,billing,shipping,li
 
 
 def _get_paged_sync(endpoint, params):
+    global _req_count
+    _req_count += 1
     resp = _client().get(endpoint, params=params or {})
     resp.raise_for_status()
     total = int(resp.headers.get("X-WP-TotalPages") or 1)
     return resp.json(), total
+
+
+# فیلدهای سبک برای تشخیصِ تغییر (بدونِ detail): id/وضعیت/تاریخ‌ها
+_MODIFIED_FIELDS = "id,number,status,date_created,date_modified_gmt"
+
+
+async def list_modified_orders(modified_after_iso, statuses=None, max_pages=50):
+    """سفارش‌های تغییرکرده پس از زمانِ داده‌شده (GMT). pagination اصولی. خروجی: (orders, pages)."""
+    base = {
+        "modified_after": modified_after_iso, "dates_are_gmt": "true",
+        "per_page": 100, "orderby": "modified", "order": "asc", "_fields": _MODIFIED_FIELDS,
+    }
+    if statuses:
+        base["status"] = ",".join(statuses)
+    out, page, pages = [], 1, 0
+    while page <= max_pages:
+        batch, total = await _call(_get_paged_sync, "orders", {**base, "page": page})
+        pages += 1
+        if not batch:
+            break
+        out.extend(batch)
+        if page >= max(1, total):
+            break
+        page += 1
+        await asyncio.sleep(0.25)  # delay کوتاه بین صفحه‌ها (فشارِ کمتر روی سایت)
+    return out, pages
 
 
 async def list_orders_in_range(after_iso, before_iso):
@@ -113,11 +228,11 @@ async def list_orders_in_range(after_iso, before_iso):
         "after": after_iso, "before": before_iso, "per_page": 100,
         "orderby": "date", "order": "asc", "_fields": _RANGE_FIELDS,
     }
-    first, total_pages = await asyncio.to_thread(_get_paged_sync, "orders", {**base, "page": 1})
+    first, total_pages = await _call(_get_paged_sync, "orders", {**base, "page": 1})
     out = list(first)
     if total_pages > 1:
         rest = await asyncio.gather(*[
-            asyncio.to_thread(_get_sync, "orders", {**base, "page": p})
+            _call(_get_sync, "orders", {**base, "page": p})
             for p in range(2, total_pages + 1)
         ])
         for batch in rest:
