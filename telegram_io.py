@@ -316,17 +316,29 @@ def _to_jalali(greg_str):
         return greg_str
 
 
+async def _safe_answer(q, text="", show_alert=False):
+    """پاسخِ کوئری که هرگز هندلر را نمی‌اندازد (کوئریِ قدیمی/تایم‌اوت را بی‌صدا رد می‌کند).
+
+    اگر کوئری منقضی شده باشد، Telegram خطا می‌دهد؛ ولی نباید جلوِ ادامه‌ی کار (آپدیتِ کارت
+    با edit_message که مستقل از عمرِ کوئری است) را بگیرد.
+    """
+    try:
+        await q.answer(text, show_alert=show_alert)
+    except Exception:
+        pass
+
+
 async def _handle_crm(q, context):
     data = q.data or ""
     if data == "crm:close":
-        await q.answer()
+        await _safe_answer(q,)
         try:
             await q.message.delete()
         except Exception:
             pass
         return
     if not crm.enabled():
-        await q.answer("اتصال CRM فعال نیست.", show_alert=True)
+        await _safe_answer(q,"اتصال CRM فعال نیست.", show_alert=True)
         return
     parts = data.split(":")
     action = parts[1] if len(parts) > 1 else ""
@@ -335,7 +347,7 @@ async def _handle_crm(q, context):
     actor = _actor_name(q.from_user)
     uid = q.from_user.id if q.from_user else 0
     if q.message is None:  # کارتِ قدیمی‌تر از ~۴۸ ساعت → callback بدونِ message
-        await q.answer("این کارت قدیمی شده؛ دوباره /crm را بزن.", show_alert=True)
+        await _safe_answer(q,"این کارت قدیمی شده؛ دوباره /crm را بزن.", show_alert=True)
         return
 
     async def _refresh():
@@ -350,31 +362,31 @@ async def _handle_crm(q, context):
                 print(f"[crm] بروزرسانیِ کارت ناموفق: {e!r}")
 
     if action == "open":  # کارتِ تازه
-        await q.answer("در حال دریافت…")
+        await _safe_answer(q,"در حال دریافت…")
         text, kb = await _crm_card(phone)
         await context.bot.send_message(q.message.chat_id, text, parse_mode=ParseMode.HTML, reply_markup=kb)
         return
     if action == "refresh":
-        await q.answer()
+        await _safe_answer(q,)
         await _refresh()
         return
     if action == "note":  # درخواستِ یادداشت با ریپلای
-        await q.answer()
+        await _safe_answer(q,)
         await _crm_prompt(context, q.message.chat_id, q.message.message_id,
                           f"📝 یادداشتت را در ریپلای به همین پیام بنویس.\n<code>{phone}</code>")
         return
     if action == "editname":  # ویرایشِ نام و نام‌خانوادگی با ریپلای
-        await q.answer()
+        await _safe_answer(q,)
         await _crm_prompt(context, q.message.chat_id, q.message.message_id,
                           f"✏️ نام و نام‌خانوادگی را بنویس و روی همین پیام ریپلای کن.\n<code>{phone}</code>")
         return
     if action == "orders":  # سفارش‌های مشتری از ووکامرس
-        await q.answer("در حال دریافت سفارش‌ها…")
+        await _safe_answer(q,"در حال دریافت سفارش‌ها…")
         try:
             orders = await woo.search_orders(phone, per_page=10)
         except Exception as e:
             print(f"[crm] orders {phone}: {e!r}")
-            await q.answer("خطا در دریافت سفارش‌ها ❌", show_alert=True)
+            await _safe_answer(q,"خطا در دریافت سفارش‌ها ❌", show_alert=True)
             return
         try:
             await q.edit_message_text(_orders_text(phone, orders), parse_mode=ParseMode.HTML,
@@ -384,7 +396,7 @@ async def _handle_crm(q, context):
                 print(f"[crm] orders edit: {e!r}")
         return
     if action == "viewed":  # محصولاتِ مشاهده‌شده از CRM
-        await q.answer("در حال دریافت…")
+        await _safe_answer(q,"در حال دریافت…")
         try:
             body = _viewed_text(phone, await crm.viewed_products(phone))
         except Exception as e:
@@ -397,7 +409,7 @@ async def _handle_crm(q, context):
                 print(f"[crm] viewed edit: {e!r}")
         return
     if action == "recommend":  # پیشنهادِ محصول از موتورِ CRM
-        await q.answer("در حال دریافت پیشنهادها…")
+        await _safe_answer(q,"در حال دریافت پیشنهادها…")
         try:
             body = _recommend_text(phone, await crm.recommend(phone))
         except Exception as e:
@@ -410,14 +422,14 @@ async def _handle_crm(q, context):
                 print(f"[crm] recommend edit: {e!r}")
         return
     if action == "fu":  # منوی تعیینِ پیگیری
-        await q.answer()
+        await _safe_answer(q,)
         try:
             await q.edit_message_reply_markup(reply_markup=crm_view.followup_kb(phone))
         except Exception:
             pass
         return
     if action == "fucustom":  # تاریخِ دلخواه با ریپلای
-        await q.answer()
+        await _safe_answer(q,)
         await _crm_prompt(context, q.message.chat_id, q.message.message_id,
                           f"🗓️ تاریخِ پیگیری را بنویس و روی همین پیام ریپلای کن (مثل: ۱۴۰۵/۰۵/۰۱ یا 2026-07-01 10:30).\n<code>{phone}</code>")
         return
@@ -425,34 +437,34 @@ async def _handle_crm(q, context):
         try:
             days = int(arg)
         except ValueError:
-            await q.answer()
+            await _safe_answer(q,)
             return
         when = (clock.tehran_now() + datetime.timedelta(days=days)).replace(hour=10, minute=0, second=0, microsecond=0)
         dt = when.strftime("%Y-%m-%d %H:%M")
+        await _safe_answer(q,f"⏳ ثبتِ پیگیری: {_to_jalali(dt)}…")  # پاسخِ فوری قبل از کارِ کندِ CRM
         try:  # هم وضعیت=پیگیری هم تاریخ → مطمئن در /due می‌آید
             await crm.set_status(phone, "follow_up", actor, follow_up_at=dt)
-            await q.answer(f"پیگیری: {_to_jalali(dt)} ✅")
         except Exception as e:
             print(f"[crm] setfu {phone} {dt}: {e!r}")
-            await q.answer("خطا در ثبتِ پیگیری ❌", show_alert=True)
+            await _safe_answer(q,"خطا در ثبتِ پیگیری ❌", show_alert=True)
             return
         db.record_crm_action(phone, "followup", uid, actor, detail=dt)
         await _refresh()
         return
     if action == "mst":  # منوی تغییرِ وضعیت
-        await q.answer()
+        await _safe_answer(q,)
         try:
             await q.edit_message_reply_markup(reply_markup=crm_view.status_kb(phone))
         except Exception:
             pass
         return
     if action == "sst":  # ثبتِ وضعیت
+        await _safe_answer(q,"⏳ در حال ثبت…")  # پاسخِ فوری قبل از کارِ کندِ CRM → «Query too old» نمی‌شود
         try:
             r = await crm.set_status(phone, arg, actor)
-            await q.answer(f"وضعیت: {r.get('status_label', arg)} ✅")
         except Exception as e:
             print(f"[crm] set_status {phone} {arg}: {e!r}")
-            await q.answer("خطا در ثبتِ وضعیت ❌", show_alert=True)
+            await _safe_answer(q,"خطا در ثبتِ وضعیت ❌", show_alert=True)
             return
         db.record_crm_action(phone, "status", uid, actor, detail=arg)
         await _refresh()
@@ -464,12 +476,12 @@ async def _handle_crm(q, context):
                               f"⚠️ یک قدم مانده — 📦 کدام محصول ناموجود بود؟ روی همین پیام ریپلای کن.\n<code>{phone}</code>")
         return
     if action == "masg":  # منوی اساین
-        await q.answer("بارگذاری همکاران…")
+        await _safe_answer(q,"بارگذاری همکاران…")
         try:
             agents = await crm.get_agents()
         except Exception as e:
             print(f"[crm] get_agents: {e!r}")
-            await q.answer("خطا در دریافتِ همکاران ❌", show_alert=True)
+            await _safe_answer(q,"خطا در دریافتِ همکاران ❌", show_alert=True)
             return
         try:
             await q.edit_message_reply_markup(reply_markup=crm_view.assign_kb(phone, agents))
@@ -477,17 +489,17 @@ async def _handle_crm(q, context):
             pass
         return
     if action == "sasg":  # ثبتِ اساین
+        await _safe_answer(q,"⏳ در حال اساین…")  # پاسخِ فوری قبل از کارِ کندِ CRM
         try:
             r = await crm.assign(phone, int(arg), actor)
-            await q.answer(f"اساین شد به {r.get('assigned_name', '')} ✅")
         except Exception as e:
             print(f"[crm] assign {phone} {arg}: {e!r}")
-            await q.answer("خطا در اساین ❌", show_alert=True)
+            await _safe_answer(q,"خطا در اساین ❌", show_alert=True)
             return
         db.record_crm_action(phone, "assign", uid, actor, detail=r.get("assigned_name", ""))
         await _refresh()
         return
-    await q.answer()
+    await _safe_answer(q,)
 
 
 async def cmd_crm(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -516,7 +528,7 @@ async def _handle_lead(q):
     try:
         _, action, oid = q.data.split(":")
     except ValueError:
-        await q.answer()
+        await _safe_answer(q,)
         return
     user = q.from_user
     uname = (user.full_name if user else "") or (("@" + user.username) if (user and user.username) else str(user.id if user else 0))
@@ -531,7 +543,7 @@ async def _handle_lead(q):
         await q.edit_message_text(f"{base}\n📌 {label} — {uname} • {stamp}", reply_markup=_lead_kb(oid, phone))
     except Exception:
         pass
-    await q.answer("ثبت شد ✅")
+    await _safe_answer(q,"ثبت شد ✅")
 
 
 async def push_leads(app, days, statuses):
@@ -811,17 +823,17 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     if data.startswith("crm:"):  # کارت/خواندنِ CRM — تیم در گروه
         if not _crm_can_read(q):
-            await q.answer("دسترسی ندارید.", show_alert=True)
+            await _safe_answer(q,"دسترسی ندارید.", show_alert=True)
             return
         await _handle_crm(q, context)
         return
     if not q.from_user or q.from_user.id not in config.ADMIN_USER_IDS:
-        await q.answer("اجازه‌ی دسترسی ندارید.", show_alert=True)
+        await _safe_answer(q,"اجازه‌ی دسترسی ندارید.", show_alert=True)
         return
     if q.message and q.message.chat and q.message.chat.type != "private":  # گزارش‌ها فقط در پیوی
-        await q.answer("🔒 گزارش‌ها فقط در چتِ خصوصی با ربات.", show_alert=True)
+        await _safe_answer(q,"🔒 گزارش‌ها فقط در چتِ خصوصی با ربات.", show_alert=True)
         return
-    await q.answer()
+    await _safe_answer(q,)
     if data != "search":
         context.user_data["awaiting_search"] = False
     try:

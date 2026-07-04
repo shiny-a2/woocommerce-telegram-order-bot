@@ -18,7 +18,8 @@ import requests
 
 import config
 
-_TIMEOUT = 20
+_TIMEOUT = (5, 15)  # (connect, read): dropِ اتصال در ۵ث سریع fail و retry؛ پاسخِ کند تا ۱۵ث مهلت
+_RETRIES = 2        # تلاشِ مجدد روی dropِ متناوبِ اتصالِ سایت (تا کارت‌های گروه پایدار شوند)
 
 
 def enabled() -> bool:
@@ -59,9 +60,23 @@ def _parse(r):
     return data
 
 
+def _do(method, path, **kw):
+    """درخواست با retry روی ConnectTimeout/ConnectionError (dropِ متناوبِ سایت جبران شود)."""
+    import time as _t
+    last = None
+    for attempt in range(_RETRIES + 1):
+        try:
+            return _parse(method(f"{config.CRM_TG_URL}{path}", headers=_headers(), timeout=_TIMEOUT, **kw))
+        except (requests.exceptions.ConnectTimeout, requests.exceptions.ConnectionError) as e:
+            last = e
+            if attempt < _RETRIES:
+                _t.sleep(0.4 * (attempt + 1))
+    raise last
+
+
 # ---------- خواندن (فاز ۱) ----------
 def _get_sync(path: str, params: dict | None = None):
-    return _parse(requests.get(f"{config.CRM_TG_URL}{path}", params=params or {}, headers=_headers(), timeout=_TIMEOUT))
+    return _do(requests.get, path, params=params or {})
 
 
 async def ping() -> dict:
@@ -137,7 +152,7 @@ async def due_leads(before=None, after=None, assigned_to=None, limit=50) -> list
 
 # ---------- نوشتن (فاز ۲ — آماده، در UI بعداً وصل می‌شود) ----------
 def _post_sync(path: str, payload: dict):
-    return _parse(requests.post(f"{config.CRM_TG_URL}{path}", json=payload, headers=_headers(), timeout=_TIMEOUT))
+    return _do(requests.post, path, json=payload)
 
 
 async def set_status(phone, status, actor_name, follow_up_at=None, note=None, **extra) -> dict:
