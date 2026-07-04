@@ -19,6 +19,7 @@ import db
 import poller
 import telegram_io
 import woo
+import worktasks
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LOG = os.path.join(_HERE, "data", "bot.log")
@@ -88,6 +89,7 @@ _COMMANDS = [
 async def _post_init(app):
     """پس از راه‌اندازیِ ربات: دیتابیس، استان‌ها، خط مبنا، دستورها، و تسکِ پولینگ پس‌زمینه."""
     db.init()
+    worktasks.wt_init()  # جدول‌های گزارشِ کار (روی همان دیتابیس)
     await woo.load_states()
     await _ensure_baseline()
     try:
