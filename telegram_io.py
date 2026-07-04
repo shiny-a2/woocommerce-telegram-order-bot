@@ -34,6 +34,7 @@ import crm_view
 import db
 import reports
 import woo
+import worktasks
 
 # نام فارسی وضعیت‌ها (شامل وضعیت‌های سفارشی فروشگاه مثل deliver)
 _STATUS_FA = {
@@ -234,17 +235,18 @@ def _followup_group():
     return int(db.get_meta("followup_group") or config.FOLLOWUP_GROUP_ID or 0)
 
 
-async def send_to_managers(app, text, parse_mode=None):
+async def send_to_managers(app, text, parse_mode=None, reply_markup=None):
     """گزارش‌های مدیریتی فقط به مدیران: REPORTS_CHAT_ID، وگرنه پیویِ تک‌تکِ ادمین‌ها."""
     if config.REPORTS_CHAT_ID:
         try:
-            await app.bot.send_message(config.REPORTS_CHAT_ID, text, parse_mode=parse_mode)
+            await app.bot.send_message(config.REPORTS_CHAT_ID, text, parse_mode=parse_mode,
+                                       reply_markup=reply_markup)
         except Exception as e:
             print(f"[managers] ارسال به REPORTS_CHAT_ID ناموفق: {e!r}")
         return
     for uid in config.ADMIN_USER_IDS:
         try:
-            await app.bot.send_message(uid, text, parse_mode=parse_mode)
+            await app.bot.send_message(uid, text, parse_mode=parse_mode, reply_markup=reply_markup)
         except Exception as e:
             print(f"[managers] ارسال به {uid} ناموفق: {e!r}")
 
@@ -642,6 +644,98 @@ def _shift_summary_text() -> str:
     return "\n".join(lines)
 
 
+_FA = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+
+
+def _fa(n) -> str:
+    return str(n).translate(_FA)
+
+
+async def _summary_counts() -> dict:
+    """شمارشِ لیدِ جدید و پیگیریِ امروز (کل/انجام‌شده/باقی‌مانده) + فهرستِ باقی‌مانده‌ها برای دکمه.
+
+    «انجام‌شده» = اپراتور از شروعِ شیفت روی آن شماره اقدامی ثبت کرده (crm_actions).
+    در خطای CRM مقدار None می‌ماند تا خطِ خلاصه «—» نشان دهد.
+    """
+    import poller  # واردسازیِ تنبل: پرهیز از حلقه‌ی import (poller خودش telegram_io را import می‌کند)
+    now = clock.tehran_now()
+    acted = {row[0] for row in db.crm_actions_since(_shift_start_epoch())}  # شماره‌های اقدام‌شده‌ی امروز
+    out = {"fu_total": None, "fu_done": None, "fu_rem": None, "fu_remaining": [],
+           "nl_total": None, "nl_done": None, "nl_rem": None, "nl_remaining": []}
+    try:  # پیگیری‌های سررسیدشده‌ی اخیر
+        after = (now - poller._DUE_WINDOW).strftime("%Y-%m-%d %H:%M")
+        before = now.strftime("%Y-%m-%d %H:%M")
+        recent = poller._recent_due(await crm.due_leads(after=after, before=before, limit=100))
+        rem = [d for d, _k in recent if crm.normalize_phone(d.get("phone")) not in acted]
+        out.update(fu_total=len(recent), fu_rem=len(rem), fu_done=len(recent) - len(rem), fu_remaining=rem)
+    except Exception as e:
+        print(f"[summary] پیگیری خطا: {e!r}")
+    try:  # لیدهای جدیدِ امروز (از مرزِ فریزشده‌ی شروعِ شیفت)
+        if db.get_meta("newlead_day_date") == now.strftime("%Y-%m-%d"):
+            base = int(db.get_meta("newlead_day_id") or 0)
+            leads = (await crm.new_leads(since_id=base, limit=100)).get("leads") or []
+            rem = [L for L in leads if L.get("phone") and crm.normalize_phone(L["phone"]) not in acted]
+            out.update(nl_total=len(leads), nl_rem=len(rem), nl_done=len(leads) - len(rem), nl_remaining=rem)
+    except Exception as e:
+        print(f"[summary] لیدِ جدید خطا: {e!r}")
+    return out
+
+
+def _summary_counts_lines(c: dict) -> str:
+    """دو خطِ شمارشِ لیدِ جدید و پیگیری برای افزودن به جمع‌بندیِ شیفت."""
+    def cell(total, done, rem):
+        if total is None:
+            return "—"
+        return f"{_fa(total)} (انجام‌شده: {_fa(done)} · باقی‌مانده: {_fa(rem)})"
+    return (
+        f"🆕 لیدِ جدیدِ امروز: {cell(c['nl_total'], c['nl_done'], c['nl_rem'])}\n"
+        f"⏰ پیگیریِ امروز: {cell(c['fu_total'], c['fu_done'], c['fu_rem'])}"
+    )
+
+
+def _summary_kb(c: dict):
+    """دکمه‌ی «ارسالِ کارتِ باقی‌مانده‌ها» — فقط اگر باقی‌مانده‌ای باشد."""
+    n = len(c.get("fu_remaining") or []) + len(c.get("nl_remaining") or [])
+    if n <= 0:
+        return None
+    return InlineKeyboardMarkup([[InlineKeyboardButton(
+        f"📤 ارسالِ {_fa(n)} کارتِ باقی‌مانده به گروه", callback_data="restcards:send")]])
+
+
+async def _send_remaining_cards(q, context) -> None:
+    """کارت‌های لید/پیگیریِ باقی‌مانده‌ی امروز را به گروهِ پیگیری می‌فرستد (ادمین‌محور)."""
+    await _safe_answer(q, "در حال ارسالِ باقی‌مانده‌ها…")
+    group = _followup_group()
+    if not group:
+        await _safe_answer(q, "گروهِ پیگیری تنظیم نشده.", show_alert=True)
+        return
+    c = await _summary_counts()
+    sent = 0
+    for d in (c["fu_remaining"] or [])[:60]:  # پیگیری‌های باقی‌مانده
+        try:
+            phone = d.get("phone") or ""
+            await context.bot.send_message(group, _due_text(d), parse_mode=ParseMode.HTML,
+                                           reply_markup=_due_kb(phone))
+            db.mark_due_sent(f"{phone}|{d.get('next_follow_up_gmt') or ''}")  # تا تکی دوباره نیاید
+            sent += 1
+            await asyncio.sleep(0.4)
+        except Exception as e:
+            print(f"[restcards] پیگیری {d.get('phone')}: {e!r}")
+    for L in (c["nl_remaining"] or [])[:60]:  # لیدهای جدیدِ باقی‌مانده
+        try:
+            phone = L.get("phone") or ""
+            await context.bot.send_message(group, _newlead_text(L), parse_mode=ParseMode.HTML,
+                                           reply_markup=_newlead_kb(phone))
+            sent += 1
+            await asyncio.sleep(0.4)
+        except Exception as e:
+            print(f"[restcards] لید {L.get('phone')}: {e!r}")
+    try:
+        await context.bot.send_message(q.message.chat_id, f"📤 {_fa(sent)} کارتِ باقی‌مانده به گروه ارسال شد.")
+    except Exception:
+        pass
+
+
 def _due_text(d: dict) -> str:
     """متنِ یک یادآوریِ پیگیری."""
     name = d.get("name") or "—"
@@ -818,6 +912,9 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     data = q.data or ""
     print(f"[cb] دریافت: {data} از {q.from_user.id if q.from_user else '?'}")
+    if data.startswith("wt:"):  # گزارشِ کار: بستنِ تسک
+        await worktasks.on_callback_hook(q, context)
+        return
     if data.startswith("lead:"):  # دکمه‌های پیگیری در گروه — برای همه‌ی اعضای تیم
         await _handle_lead(q)
         return
@@ -826,6 +923,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await _safe_answer(q,"دسترسی ندارید.", show_alert=True)
             return
         await _handle_crm(q, context)
+        return
+    if data.startswith("restcards:"):  # ارسالِ باقی‌مانده‌ها به گروه — فقط ادمین (از پیوی یا گروه)
+        if not q.from_user or q.from_user.id not in config.ADMIN_USER_IDS:
+            await _safe_answer(q, "فقط مدیران.", show_alert=True)
+            return
+        await _send_remaining_cards(q, context)
         return
     if not q.from_user or q.from_user.id not in config.ADMIN_USER_IDS:
         await _safe_answer(q,"اجازه‌ی دسترسی ندارید.", show_alert=True)
@@ -932,6 +1035,8 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """یادداشت/جزئیاتِ CRM (ریپلای روی کارت/پرامپت) یا عبارتِ جستجوی سفارش."""
     msg = update.message
     if not msg:  # پیامِ ادیت‌شده / پستِ کانال → نادیده
+        return
+    if await worktasks.on_group_message(update, context):  # گروهِ گزارشِ کار: ثبتِ تسک/گزارش
         return
     # ثبتِ CRM با ریپلای (با Privacyِ گروه هم کار می‌کند)
     if msg.reply_to_message and crm.enabled():
@@ -1059,5 +1164,11 @@ def register_handlers(app: Application):
     app.add_handler(CommandHandler("setfollowup", cmd_setfollowup))
     app.add_handler(CommandHandler("range", cmd_range))
     app.add_handler(CommandHandler("crm", cmd_crm))
+    app.add_handler(CommandHandler("setworkgroup", worktasks.cmd_setworkgroup))
+    app.add_handler(CommandHandler("work", worktasks.cmd_work))
+    app.add_handler(CommandHandler("tasks", worktasks.cmd_tasks))
+    app.add_handler(CommandHandler("report", worktasks.cmd_report))
+    app.add_handler(CommandHandler("perf", worktasks.cmd_perf))
+    app.add_handler(CommandHandler("perfmonth", worktasks.cmd_perfmonth))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.add_handler(CallbackQueryHandler(on_callback))

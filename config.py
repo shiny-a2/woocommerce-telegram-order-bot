@@ -53,23 +53,6 @@ WOO_CK = _get("WOO_CK", "")
 WOO_CS = _get("WOO_CS", "")
 WOO_WEBHOOK_SECRET = _get("WOO_WEBHOOK_SECRET", "")
 
-# ---------- بازیابیِ پرداختِ ناموفق (پیام به مشتری از طریقِ یوزربات) ----------
-RECOVERY_MODE = (_get("RECOVERY_MODE", "off") or "off").strip().lower()  # off | test | live
-RECOVERY_TEST_PHONE = _get("RECOVERY_TEST_PHONE", "")  # در حالتِ test همه‌ی پیام‌ها به این شماره می‌رود
-RECOVERY_STATUSES = _csv("RECOVERY_STATUSES", "failed,pending")
-RECOVERY_FIRST_DELAY_MIN = _int("RECOVERY_FIRST_DELAY_MIN", 30)  # پیامِ اول چند دقیقه بعد از رهاشدن
-RECOVERY_SECOND_DELAY_H = _int("RECOVERY_SECOND_DELAY_H", 24)    # پیامِ دوم چند ساعت بعد از اولی
-RECOVERY_WINDOW_H = _int("RECOVERY_WINDOW_H", 48)               # فقط سفارش‌های این بازه
-RECOVERY_SEND_START = _int("RECOVERY_SEND_START", 10)           # ساعتِ مجازِ ارسال به مشتری (تهران)
-RECOVERY_SEND_END = _int("RECOVERY_SEND_END", 21)
-RECOVERY_MAX_PER_TICK = _int("RECOVERY_MAX_PER_TICK", 8)        # سقفِ پیام در هر چرخه (ضدِسیلِ بک‌لاگ)
-# اتصال به صفِ تراکنشیِ یوزرباتِ tg-outreach
-TXOUT_URL = _get("TXOUT_URL", "http://127.0.0.1:8091/api/tx")
-TXOUT_TOKEN = _get("TXOUT_TOKEN", "")  # همان DASH_TOKEN یوزربات
-# کانالِ ارسالِ بازیابی: whatsapp (wa-assistant, پورت 8093) یا telegram (tg-outreach)
-RECOVERY_CHANNEL = (_get("RECOVERY_CHANNEL", "whatsapp") or "whatsapp").strip().lower()
-WA_SEND_URL = _get("WA_SEND_URL", "http://127.0.0.1:8093/api/send")
-WA_SEND_TOKEN = _get("WA_SEND_TOKEN", "")  # همان CONTROL_TOKEN واتساپ
 # ---------- بهینه‌سازیِ خواندنِ ووکامرس (sync افزایشی) ----------
 WC_INCREMENTAL = (_get("WC_INCREMENTAL", "on") or "on").strip().lower() != "off"  # off = مسیرِ قدیمیِ full-scan
 WC_OVERLAP_MIN = _int("WC_OVERLAP_MIN", 5)             # overlap امن برای جانیفتادنِ سفارش
@@ -97,6 +80,11 @@ SHOP_NAME = _get("SHOP_NAME", "گالری")
 MONEY_DIVISOR = _int("MONEY_DIVISOR", 10)
 # نگاشت روش‌های پرداختِ خاص به نام نمایشی دلخواه (نمونه: {"other": "Bank transfer"})
 PAYMENT_ALIASES = {}
+
+# ---------- مغزِ اختصاصیِ گزارشِ کار (ارزیابیِ AI) ----------
+OPENAI_API_KEY = _get("OPENAI_API_KEY", "")
+WT_MODEL = _get("WT_MODEL", "gpt-5.5")
+WT_MAX_TOKENS = _int("WT_MAX_COMPLETION_TOKENS", 2000)
 
 # ---------- وب‌هوک ----------
 WEBHOOK_ENABLED = _bool("WEBHOOK_ENABLED", False)

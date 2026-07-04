@@ -13,7 +13,7 @@ import config
 import crm
 import db
 import pipeline
-import recovery
+import worktasks
 import reports
 import telegram_io
 import wc_sync
@@ -117,7 +117,10 @@ async def _maybe_shift_summary(app):
     if db.get_meta("last_shift") == today:
         return
     try:  # عملکردِ اپراتورها فقط برای مدیران (نه گروهِ تیم)
-        await telegram_io.send_to_managers(app, telegram_io._shift_summary_text(), parse_mode="HTML")
+        counts = await telegram_io._summary_counts()
+        text = telegram_io._shift_summary_text() + "\n\n" + telegram_io._summary_counts_lines(counts)
+        await telegram_io.send_to_managers(app, text, parse_mode="HTML",
+                                           reply_markup=telegram_io._summary_kb(counts))
         db.set_meta("last_shift", today)
         print("[shift] جمع‌بندیِ پایانِ شیفت به مدیران ارسال شد.")
     except Exception as e:
@@ -168,6 +171,12 @@ async def _maybe_morning_worklist(app):
         print(f"[worklist] دریافت ناموفق: {e}")
         return
     db.set_meta("last_worklist", today)  # حتی اگر خالی، علامت بزن تا هر دقیقه تلاش نشود
+    try:  # مرزِ لیدِ جدیدِ شروعِ روز را فریز کن (baseline حین روز جابه‌جا می‌شود؛ برای شمارشِ «امروز»)
+        mx = int((await crm.new_leads(since_id=2_000_000_000, limit=1)).get("max_id") or 0)
+        db.set_meta("newlead_day_id", str(mx))
+        db.set_meta("newlead_day_date", today)
+    except Exception as e:
+        print(f"[worklist] فریزِ مرزِ لیدِ جدید ناموفق: {e!r}")
     recent = _recent_due(due)
     if not recent:
         return
@@ -370,13 +379,11 @@ async def run(app):
             await _maybe_reconcile(app)  # آشتیِ کامل روزی یک‌بار (۳–۵ صبح)
             await _maybe_leads(app)
             await _maybe_shift_summary(app)
+            await worktasks.maybe_report_reminder(app)  # پایانِ شیفت: یادآوریِ گزارش به نداده‌ها
+            await worktasks.maybe_manager_report(app)  # پایانِ شیفت: گزارشِ عملکرد به مدیران
             await _maybe_morning_worklist(app)  # «کارِ امروز» سرِ شیفت (و علامتِ ارسال)
             if cycle % 5 == 0:  # هر ~۵ دقیقه
                 await _maybe_due_reminders(app)
-            try:
-                await recovery.tick(app)  # هر چرخه (~۱ دقیقه) → شلیکِ به‌موقعِ بازیابی، بدونِ لگ
-            except Exception as e:
-                print(f"[recover] tick خطا: {e!r}")
             await reports.prewarm()  # کش را گرم نگه دار → گزارش‌های ادمین آنی
         except Exception as e:
             print(f"[poller] خطای سیکل: {e!r}")
