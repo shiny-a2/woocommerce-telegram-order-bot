@@ -28,13 +28,16 @@ def _toman(val) -> str:
         return str(val or "0")
 
 
+def _channel():
+    """(url, status_url, header, token) بر اساسِ کانالِ بازیابی (واتساپ یا تلگرام)."""
+    if config.RECOVERY_CHANNEL == "whatsapp":
+        return config.WA_SEND_URL, config.WA_SEND_URL + "/status", "X-Token", config.WA_SEND_TOKEN
+    return config.TXOUT_URL, config.TXOUT_URL + "/status", "X-Dash-Token", config.TXOUT_TOKEN
+
+
 def _enqueue_sync(phone, text, key):
-    r = requests.post(
-        config.TXOUT_URL,
-        json={"phone": phone, "text": text, "key": key},
-        headers={"X-Dash-Token": config.TXOUT_TOKEN},
-        timeout=12,
-    )
+    url, _s, hdr, tok = _channel()
+    r = requests.post(url, json={"phone": phone, "text": text, "key": key}, headers={hdr: tok}, timeout=12)
     r.raise_for_status()
     return r.json()
 
@@ -44,14 +47,10 @@ async def _enqueue(phone, text, key):
 
 
 def _tx_status_sync(key):
-    """وضعیتِ یک پیام در صفِ یوزربات (sent / no_telegram / failed / optout / pending / None)."""
+    """وضعیتِ یک پیام در صف (sent / no_telegram / no_whatsapp / failed / optout / expired / pending / None)."""
     try:
-        r = requests.get(
-            config.TXOUT_URL + "/status",
-            params={"key": key},
-            headers={"X-Dash-Token": config.TXOUT_TOKEN},
-            timeout=8,
-        )
+        _u, surl, hdr, tok = _channel()
+        r = requests.get(surl, params={"key": key}, headers={hdr: tok}, timeout=8)
         r.raise_for_status()
         return r.json().get("status")
     except Exception:
@@ -140,7 +139,7 @@ def _elapsed_min(date_created_gmt) -> float:
 
 
 async def tick(app):
-    if config.RECOVERY_MODE not in ("test", "live") or not crm.enabled() or not config.TXOUT_TOKEN:
+    if config.RECOVERY_MODE not in ("test", "live") or not crm.enabled() or not _channel()[3]:
         return
     now = clock.tehran_now()
     now_e = time.time()
@@ -194,7 +193,7 @@ async def tick(app):
         elif row["sent1_at"] and not row["sent2_at"] and (now_e - row["sent1_at"]) >= config.RECOVERY_SECOND_DELAY_H * 3600:
             # اگر مرحله‌۱ اصلاً تحویل نشد (بی‌تلگرام/حریم‌خصوصی)، مرحله‌۲ بی‌فایده است → رد و پایان
             st1 = await _tx_status(f"rec:{oid}:1" + (":test" if is_test else ""))
-            if st1 in ("no_telegram", "failed", "optout"):
+            if st1 in ("no_telegram", "no_whatsapp", "failed", "optout", "expired", "invalid"):
                 db.recovery_mark_sent(oid, 2)  # علامتِ پایان تا دیگر پردازش نشود
                 print(f"[recover] سفارش {oid}: مرحله‌۱ {st1} → مرحله‌۲ رد شد (تحویل‌نشده).")
                 continue
