@@ -10,7 +10,7 @@ import os
 import sys
 import time
 
-from telegram import BotCommand, Update
+from telegram import BotCommand, BotCommandScopeChat, Update
 from telegram.ext import Application
 
 import clock
@@ -79,10 +79,25 @@ async def _on_error(update, context):
 
 
 _COMMANDS = [
-    BotCommand("menu", "منوی گزارش‌ها و فروش"),
-    BotCommand("crm", "کارت مشتری با شماره — مثل: /crm 0912…"),
-    BotCommand("range", "گزارش فروش در بازه‌ی دلخواه شمسی"),
+    BotCommand("menu", "منو و گزارش‌ها"),
+    BotCommand("work", "مرکز گزارش کار (تسک/گزارش)"),
+    BotCommand("tasks", "تسک‌های من"),
+    BotCommand("report", "ثبت گزارش کار روزانه"),
+    BotCommand("crm", "کارت مشتری — مثل: /crm 0912…"),
+    BotCommand("range", "گزارش فروش در بازه‌ی شمسی"),
+    BotCommand("perf", "کارت عملکرد تیم امروز (مدیر)"),
+    BotCommand("perfmonth", "روند ماهانه‌ی عملکرد (مدیر)"),
+    BotCommand("crawl", "خزش مشکلات و ساخت تسک (مدیر)"),
+    BotCommand("role", "شرح وظایف پرسنل (مدیر)"),
+    BotCommand("setup", "چک‌لیست راه‌اندازی و آنبوردینگ (مدیر)"),
+    BotCommand("health", "سلامت و سنجش مدیر داخلی (مدیر)"),
+    BotCommand("directives", "دستورهای دائمی مدیر"),
+    BotCommand("igreport", "آنالیز پیج اینستاگرام (مدیر)"),
+    BotCommand("setigadmin", "تعیین ادمین اینستاگرام (مدیر)"),
+    BotCommand("linkwp", "لینک پرسنل به کاربر وردپرس (مدیر)"),
+    BotCommand("setworkgroup", "ثبت این گروه به‌عنوان گروه کار (مدیر)"),
     BotCommand("setfollowup", "ثبت این گروه به‌عنوان گروه پیگیری"),
+    BotCommand("fixcaptions", "به‌روزرسانی کپشن سفارش‌های قبلی با تفکیک تخفیف (مدیر)"),
 ]
 
 
@@ -93,7 +108,14 @@ async def _post_init(app):
     await woo.load_states()
     await _ensure_baseline()
     try:
-        await app.bot.set_my_commands(_COMMANDS)
+        await app.bot.set_my_commands(_COMMANDS)  # اسکوپِ پیش‌فرض (پیوی + گروه)
+        for _gk in ("work_group", "followup_group", "TELEGRAM_GROUP_ID"):
+            _gid = int(db.get_meta(_gk) or 0) if not _gk.isupper() else config.TELEGRAM_GROUP_ID
+            if _gid:  # صریحاً برای گروه‌ها هم ست کن تا منوی «/» در گروه کامل بیاید
+                try:
+                    await app.bot.set_my_commands(_COMMANDS, scope=BotCommandScopeChat(chat_id=_gid))
+                except Exception:  # noqa: BLE001
+                    pass
     except Exception as e:
         print(f"[bot] ثبت دستورها ناموفق بود: {e}")
     app.bot_data["_poller"] = asyncio.create_task(poller.run(app))

@@ -67,6 +67,11 @@ CRM_TG_URL = (_get("CRM_TG_URL", "") or "").rstrip("/")
 # توکنِ اختصاصیِ تلگرام (هدر X-A2-Token). تا ست نشود، بخشِ CRM در ربات خاموش است
 CRM_TG_TOKEN = _get("CRM_TG_TOKEN", "")
 
+# ---------- آنالیزِ اینستاگرام (سرویسِ مستقلِ ig-insights؛ رشد/تعامل/آنالیزِ پیج) ----------
+# ig-insights با کپیِ سشن، آمارِ واقعیِ رشد و تعامل را جمع می‌کند و /api/report می‌دهد.
+IG_INSIGHTS_URL = (_get("IG_INSIGHTS_URL", "") or "").rstrip("/")
+IG_INSIGHTS_TOKEN = _get("IG_INSIGHTS_TOKEN", "")
+
 # ---------- رفتار ----------
 POLL_INTERVAL_SECONDS = _int("POLL_INTERVAL_SECONDS", 60)
 POST_STATUSES = _csv("POST_STATUSES")
@@ -78,7 +83,7 @@ CURRENCY_LABEL = _get("CURRENCY_LABEL", "تومان")
 SHOP_NAME = _get("SHOP_NAME", "گالری")
 # واحد فروشگاه ریال است؛ برای نمایش تومان مبلغ بر این عدد تقسیم می‌شود (۱۰). برای نمایش ریال ۱ بگذار
 MONEY_DIVISOR = _int("MONEY_DIVISOR", 10)
-# نگاشت روش‌های پرداختِ خاص به نام نمایشی دلخواه (نمونه: {"other": "Bank transfer"})
+# نگاشت روش‌های پرداختِ خاص به نام نمایشی (در پیکربندیِ خصوصی مقداردهی می‌شود)
 PAYMENT_ALIASES = {}
 
 # ---------- مغزِ اختصاصیِ گزارشِ کار (ارزیابیِ AI) ----------

@@ -382,6 +382,7 @@ async def run(app):
             await worktasks.maybe_report_reminder(app)  # پایانِ شیفت: یادآوریِ گزارش به نداده‌ها
             await worktasks.maybe_manager_report(app)  # پایانِ شیفت: گزارشِ عملکرد به مدیران
             await _maybe_morning_worklist(app)  # «کارِ امروز» سرِ شیفت (و علامتِ ارسال)
+            await worktasks.maybe_auto_crawl(app)  # خزشِ خودکارِ روزانه: مشکلات → تسکِ خودکار به مسئول‌ها
             if cycle % 5 == 0:  # هر ~۵ دقیقه
                 await _maybe_due_reminders(app)
             await reports.prewarm()  # کش را گرم نگه دار → گزارش‌های ادمین آنی

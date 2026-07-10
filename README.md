@@ -2,7 +2,8 @@
 
 A Telegram bot that turns WooCommerce orders into **live, self-updating order
 cards** in a group chat — with an interactive sales dashboard, automated
-abandoned-order recovery, and full management reporting for admins.
+abandoned-order recovery, full management reporting, a CRM customer lookup, and
+an **adaptive internal manager** that runs the team's daily work-report loop.
 
 For every paid order it posts a rich card — featured product image plus full
 order details with a Jalali (Shamsi) date. That card is *live*: as the order
@@ -21,6 +22,7 @@ follow-up action attributed to the agent who took it.
 - **Edited in place** — captions update on every change; no reply spam.
 - **Featured product image** — fetched from the REST API and converted to JPEG; nothing is persisted to disk.
 - **Plugin-aware** — parses order-edit plugin notes (product swap, price fix, balance payment, refund) into a clean summary and reflects the precise stock location.
+- **Discount-aware caption** — when an order carries a coupon or discount, the card breaks out the pre-discount price, the discount/coupon amount, shipping, and the final amount paid; `/fixcaptions` can backfill this into already-posted cards.
 - **Jalali (Shamsi) calendar** — order dates and every report range use the Persian calendar.
 
 ### Admin dashboard (inline keyboard)
@@ -39,7 +41,22 @@ follow-up action attributed to the agent who took it.
 - **Daily summary** — a sales recap is posted at local midnight (Tehran).
 - **Accurate clock** — local time is derived from an external time source, so scheduled jobs fire correctly even when the host clock has drifted.
 - **Warm report cache** — reports are pre-warmed in the background so the admin menu responds instantly.
-- **Self-healing service** — runs as a Windows scheduled task with start-on-boot and crash recovery; a single long-polling instance with explicit update delivery.
+- **Self-healing service** — start-on-boot/login with crash recovery; a single long-polling instance with explicit update delivery, kept alive by a lightweight watchdog that also checks site availability on a schedule.
+
+### Team operations — adaptive internal manager
+- **Daily work-report loop** — each team member files a short report; an LLM evaluates it against the day's goals and yesterday's carried-over work, and verifies whether pending items were actually completed.
+- **Growth-oriented tasks** — the manager proposes concrete, measurable next tasks (each with a priority and a success metric) instead of vague to-dos.
+- **Learns from the manager** — when an admin replies to any of the bot's messages, the reply is interpreted as a standing directive, a task edit, or a correction, then applied and prioritised in future evaluations.
+- **Role-based auto-assignment** — admins describe each person's responsibilities, and issues are routed to the right owner automatically.
+- **Gentle crawler** — an anti-block scan of the store, CRM and engagement signals surfaces real problems (out-of-stock, stale leads, weakening engagement) and turns them into assigned tasks, on demand or on a daily schedule.
+- **Self-check** — `/health` reports the manager's own metrics (task-completion rate, score trend, recurring carry-over); `/setup` is a per-person onboarding checklist.
+
+### CRM & customer cards
+- **`/crm 0912…`** — pulls a customer's profile, source and recent activity from the companion CRM plugin, with Persian source labels.
+- **Per-agent activity** — the manager can factor each team member's CRM activity into the daily evaluation.
+
+### Instagram analytics (optional companion)
+- **Growth & engagement summary** — when a read-only insights companion is configured, `/igreport` returns reach, saves, engagement and audience signals to guide content decisions. The bot only *reads* a report endpoint; it never touches the Instagram session.
 
 ## Architecture
 
@@ -118,6 +135,9 @@ python main.py
 | `MONEY_DIVISOR` | Currency divisor (Rial→Toman = `10`) |
 | `POLL_INTERVAL_SECONDS` | Polling interval |
 | `WEBHOOK_ENABLED` | Enable the instant webhook (optional) |
+| `CRM_TG_URL` / `CRM_TG_TOKEN` | Companion CRM plugin REST base and token (optional) |
+| `IG_INSIGHTS_URL` / `IG_INSIGHTS_TOKEN` | Read-only Instagram insights companion (optional) |
+| `OPENAI_API_KEY` / `WT_MODEL` | LLM key and model for work-report evaluation (optional) |
 
 ## Admin menu & commands
 
@@ -128,11 +148,19 @@ agent outcomes, CSV export, and order search.
 - `/menu` — open the dashboard
 - `/range ۱۴۰۳/۰۱/۰۱ ۱۴۰۳/۰۱/۳۱` — custom-range report
 - `/setfollowup` — (sent inside the follow-up group) registers it as the lead group
+- `/work`, `/report`, `/tasks` — the team work-report loop (report, evaluate, view tasks)
+- `/perf`, `/perfmonth` — team performance card (today / monthly trend)
+- `/crm 0912…` — customer card
+- `/crawl` — scan for issues and auto-create assigned tasks
+- `/role` — define a staff member's responsibilities
+- `/health`, `/setup` — internal-manager self-metrics and onboarding checklist
+- `/igreport` — Instagram growth & engagement summary (if configured)
+- `/fixcaptions` — backfill the discount breakdown into previously posted order cards
 
 ## Tech stack
 
-Python · python-telegram-bot · WooCommerce REST API · Pillow · jdatetime ·
-FastAPI/Uvicorn (optional webhook) · SQLite
+Python · python-telegram-bot · WooCommerce REST API · OpenAI (work-report
+evaluation) · Pillow · jdatetime · FastAPI/Uvicorn (optional webhook) · SQLite
 
 ---
 

@@ -106,8 +106,9 @@ def _client():
             consumer_secret=config.WOO_CS,
             version="wc/v3",
             timeout=30,
-            # کلید/سکرت در هدرِ Basic می‌رود نه در URL — تا در خطاها/لاگ لو نرود
-            query_string_auth=False,
+            # هاست هدرِ Authorization را حذف می‌کند (۴۰۱)، پس احراز از طریقِ query-string انجام می‌شود.
+            # روی HTTPS این امن است (کلید/سکرت در بدنه‌ی رمزنگاری‌شده‌ی TLS می‌رود).
+            query_string_auth=True,
         )
     return _api
 
@@ -122,6 +123,25 @@ def _get_sync(endpoint, params=None):
 
 async def get(endpoint, params=None):
     return await _call(_get_sync, endpoint, params)
+
+
+def _count_sync(endpoint, params=None):
+    """کلِ آیتم‌ها را از هدرِ X-WP-Total می‌خواند، بدونِ کشیدنِ همه‌ی صفحه‌ها."""
+    global _req_count
+    _req_count += 1
+    p = dict(params or {})
+    p["per_page"] = 1  # فقط یک آیتم؛ عددِ کل در هدر است
+    resp = _client().get(endpoint, params=p)
+    resp.raise_for_status()
+    total = resp.headers.get("X-WP-Total")
+    if total is None:  # پاسخِ سالمِ ووکامرس همیشه این هدر را دارد؛ نبودش = پاسخِ نامعتبر (بلاک/کش/آشغال)
+        raise ValueError("X-WP-Total header missing (پاسخِ نامعتبرِ ووکامرس)")
+    return int(total)
+
+
+async def total_count(endpoint, params=None):
+    """شمارشِ کلِ یک منبع (products/orders/…) از هدرِ X-WP-Total."""
+    return await _call(_count_sync, endpoint, params)
 
 
 def _put_sync(endpoint, data):
@@ -280,6 +300,10 @@ def caption_fields(order):
     ship_lines = order.get("shipping_lines") or []
     shipping = ship_lines[0].get("method_title", "") if ship_lines else ""
 
+    # تفکیکِ مالی: جمعِ قبل از تخفیفِ اقلام (subtotalِ هر آیتم قبل از تخفیف است)
+    items_subtotal = sum(float(li.get("subtotal") or 0) for li in (order.get("line_items") or []))
+    coupons = [str(c.get("code", "")).strip() for c in (order.get("coupon_lines") or []) if c.get("code")]
+
     return {
         "number": order.get("number") or order.get("id"),
         "name": name,
@@ -290,5 +314,9 @@ def caption_fields(order):
         "payment": _map_payment(order.get("payment_method_title", "")),
         "shipping": shipping,
         "total": order.get("total", ""),
+        "discount_total": order.get("discount_total", "") or "0",
+        "shipping_total": order.get("shipping_total", "") or "0",
+        "items_subtotal": items_subtotal,
+        "coupons": coupons,
         "date_created": order.get("date_created"),
     }

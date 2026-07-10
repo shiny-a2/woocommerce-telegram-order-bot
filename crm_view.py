@@ -8,6 +8,8 @@ import html
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+import crm
+
 # نگاشتِ وضعیتِ لید به ایموجی
 _STATUS_EMOJI = {
     "new": "🆕", "called": "📞", "no_answer": "🔕", "follow_up": "🟡",
@@ -69,7 +71,7 @@ def render_profile(data: dict) -> str:
 
     sub = []
     if c.get("source"):
-        sub.append(f"🔖 {_e(c.get('source'))}")
+        sub.append(f"🔖 {_e(crm.source_label(c.get('source')))}")
     if c.get("customer_label"):
         sub.append(f"🏷️ {_e(c.get('customer_label'))}")
     if sub:

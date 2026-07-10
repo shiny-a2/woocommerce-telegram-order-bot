@@ -32,6 +32,7 @@ import config
 import crm
 import crm_view
 import db
+import igstats
 import reports
 import woo
 import worktasks
@@ -105,8 +106,23 @@ def build_caption(order, stock_location=None, summary=None) -> str:
     lines.append(_product_line(order))
     if location:
         lines.append(f"📦 موقعیت موجودی: {_esc(location)}")
-    if not summary.get("has_payment"):
-        lines.append(f"💰 مبلغ پرداختی: {reports.fmt_money(f['total'])} {config.CURRENCY_LABEL}")
+    # تفکیکِ مالی: اگر تخفیف دارد، قیمتِ قبل تخفیف + مبلغِ تخفیف/کوپن + حملِ اگر بود + پرداختی
+    try:
+        disc = float(f.get("discount_total") or 0)
+        ship = float(f.get("shipping_total") or 0)
+    except (TypeError, ValueError):
+        disc, ship = 0.0, 0.0
+    cl_ = config.CURRENCY_LABEL
+    if disc > 0:
+        lines.append(f"🏷️ قیمت قبل تخفیف: {reports.fmt_money(f.get('items_subtotal') or 0)} {cl_}")
+        cps = [c for c in (f.get('coupons') or []) if c]
+        cp_txt = (" (کوپن: " + "، ".join(_esc(c) for c in cps) + ")") if cps else ""
+        lines.append(f"➖ تخفیف{cp_txt}: {reports.fmt_money(disc)} {cl_}")
+        if ship > 0:
+            lines.append(f"🚚 هزینه ارسال: {reports.fmt_money(ship)} {cl_}")
+        lines.append(f"💰 مبلغ پرداختی: {reports.fmt_money(f['total'])} {cl_}")
+    elif not summary.get("has_payment"):
+        lines.append(f"💰 مبلغ پرداختی: {reports.fmt_money(f['total'])} {cl_}")
     if corrections:
         lines.append("")
         lines.append("➖ اصلاحات سفارش:")
@@ -651,10 +667,36 @@ def _fa(n) -> str:
     return str(n).translate(_FA)
 
 
-async def _summary_counts() -> dict:
-    """شمارشِ لیدِ جدید و پیگیریِ امروز (کل/انجام‌شده/باقی‌مانده) + فهرستِ باقی‌مانده‌ها برای دکمه.
+_LEAD_SCAN = 400  # چند لیدِ اخیر برای یافتنِ رسیدگی‌نشده‌های انباشتی اسکن شود (هر صفحه سقفِ ۲۰۰)
 
-    «انجام‌شده» = اپراتور از شروعِ شیفت روی آن شماره اقدامی ثبت کرده (crm_actions).
+
+async def _scan_recent_leads(scan: int = _LEAD_SCAN):
+    """آخرین ~scan لید را (صفحه‌بندی‌شده، از max_id به عقب) برمی‌گرداند + max_id.
+
+    اندپوینت سقفِ ۲۰۰ در هر درخواست دارد؛ پس از (max_id − scan) به بالا صفحه‌به‌صفحه می‌خوانیم
+    تا رسیدگی‌نشده‌های چند روزِ اخیر (نه فقط امروز) هم دیده شوند.
+    """
+    mx = int((await crm.new_leads(since_id=2_000_000_000, limit=1)).get("max_id") or 0)
+    since = max(0, mx - scan)
+    out, guard = {}, 0
+    while guard < 6:
+        guard += 1
+        leads = (await crm.new_leads(since_id=since, limit=200)).get("leads") or []
+        if not leads:
+            break
+        for L in leads:
+            out[L.get("id")] = L
+        since = max(int(L.get("id") or 0) for L in leads)
+        if since >= mx or len(leads) < 200:
+            break
+    return list(out.values()), mx
+
+
+async def _summary_counts() -> dict:
+    """لیدِ جدیدِ رسیدگی‌نشده و پیگیریِ انجام‌نشده — «انباشتی» (شاملِ روزهای قبل، نه فقط امروز).
+
+    - لیدِ رسیدگی‌نشده = وضعیتش هنوز «جدید» (status=new) است؛ یعنی کارتِ بدونِ تغییر از روزهای قبل هم.
+    - پیگیریِ انجام‌نشده = سررسیدشده‌ی تا ۱۴ روزِ قبل که هنوز اقدامی رویش نشده.
     در خطای CRM مقدار None می‌ماند تا خطِ خلاصه «—» نشان دهد.
     """
     import poller  # واردسازیِ تنبل: پرهیز از حلقه‌ی import (poller خودش telegram_io را import می‌کند)
@@ -662,76 +704,99 @@ async def _summary_counts() -> dict:
     acted = {row[0] for row in db.crm_actions_since(_shift_start_epoch())}  # شماره‌های اقدام‌شده‌ی امروز
     out = {"fu_total": None, "fu_done": None, "fu_rem": None, "fu_remaining": [],
            "nl_total": None, "nl_done": None, "nl_rem": None, "nl_remaining": []}
-    try:  # پیگیری‌های سررسیدشده‌ی اخیر
+    try:  # پیگیری‌های سررسیدشده‌ی انباشتی (تا ۱۴ روزِ قبل)
         after = (now - poller._DUE_WINDOW).strftime("%Y-%m-%d %H:%M")
         before = now.strftime("%Y-%m-%d %H:%M")
-        recent = poller._recent_due(await crm.due_leads(after=after, before=before, limit=100))
+        recent = poller._recent_due(await crm.due_leads(after=after, before=before, limit=200))
         rem = [d for d, _k in recent if crm.normalize_phone(d.get("phone")) not in acted]
         out.update(fu_total=len(recent), fu_rem=len(rem), fu_done=len(recent) - len(rem), fu_remaining=rem)
     except Exception as e:
         print(f"[summary] پیگیری خطا: {e!r}")
-    try:  # لیدهای جدیدِ امروز (از مرزِ فریزشده‌ی شروعِ شیفت)
-        if db.get_meta("newlead_day_date") == now.strftime("%Y-%m-%d"):
-            base = int(db.get_meta("newlead_day_id") or 0)
-            leads = (await crm.new_leads(since_id=base, limit=100)).get("leads") or []
-            rem = [L for L in leads if L.get("phone") and crm.normalize_phone(L["phone"]) not in acted]
-            out.update(nl_total=len(leads), nl_rem=len(rem), nl_done=len(leads) - len(rem), nl_remaining=rem)
+    try:  # لیدهای جدیدِ رسیدگی‌نشده‌ی انباشتی (آخرین ~۴۰۰ لید که هنوز «جدید»اند)
+        leads, mx = await _scan_recent_leads()
+        today_base = (int(db.get_meta("newlead_day_id") or 0)
+                      if db.get_meta("newlead_day_date") == now.strftime("%Y-%m-%d") else mx)
+        nl_today = sum(1 for L in leads if int(L.get("id") or 0) > today_base)
+        rem = [L for L in leads if L.get("status") == "new" and L.get("phone")
+               and crm.normalize_phone(L["phone"]) not in acted]
+        rem.sort(key=lambda L: int(L.get("id") or 0))  # قدیمی‌ترین رسیدگی‌نشده‌ها اول
+        out.update(nl_total=nl_today, nl_done=None, nl_rem=len(rem), nl_remaining=rem)
     except Exception as e:
         print(f"[summary] لیدِ جدید خطا: {e!r}")
     return out
 
 
 def _summary_counts_lines(c: dict) -> str:
-    """دو خطِ شمارشِ لیدِ جدید و پیگیری برای افزودن به جمع‌بندیِ شیفت."""
-    def cell(total, done, rem):
-        if total is None:
-            return "—"
-        return f"{_fa(total)} (انجام‌شده: {_fa(done)} · باقی‌مانده: {_fa(rem)})"
-    return (
-        f"🆕 لیدِ جدیدِ امروز: {cell(c['nl_total'], c['nl_done'], c['nl_rem'])}\n"
-        f"⏰ پیگیریِ امروز: {cell(c['fu_total'], c['fu_done'], c['fu_rem'])}"
-    )
+    """دو خطِ «انباشتی»: لیدِ جدیدِ رسیدگی‌نشده و پیگیریِ انجام‌نشده (شاملِ روزهای قبل)."""
+    def n(v):
+        return "—" if v is None else _fa(v)
+    nl = f"🆕 لیدِ جدیدِ رسیدگی‌نشده (شاملِ روزهای قبل): <b>{n(c['nl_rem'])}</b>"
+    if c.get("nl_total") is not None:
+        nl += f"  ·  از امروز: {_fa(c['nl_total'])}"
+    fu = f"⏰ پیگیریِ انجام‌نشده (شاملِ روزهای قبل): <b>{n(c['fu_rem'])}</b>"
+    return nl + "\n" + fu
+
+
+_REST_BATCH = 40  # چند لیدِ رسیدگی‌نشده در هر بار زدنِ دکمه به گروه برود (بقیه در دفعاتِ بعد)
 
 
 def _summary_kb(c: dict):
-    """دکمه‌ی «ارسالِ کارتِ باقی‌مانده‌ها» — فقط اگر باقی‌مانده‌ای باشد."""
+    """دکمه‌ی «ارسالِ کارت‌های باقی‌مانده» — فقط اگر باقی‌مانده‌ای باشد."""
     n = len(c.get("fu_remaining") or []) + len(c.get("nl_remaining") or [])
     if n <= 0:
         return None
     return InlineKeyboardMarkup([[InlineKeyboardButton(
-        f"📤 ارسالِ {_fa(n)} کارتِ باقی‌مانده به گروه", callback_data="restcards:send")]])
+        f"📤 ارسالِ باقی‌مانده‌ها به گروه ({_fa(n)} مورد)", callback_data="restcards:send")]])
 
 
 async def _send_remaining_cards(q, context) -> None:
-    """کارت‌های لید/پیگیریِ باقی‌مانده‌ی امروز را به گروهِ پیگیری می‌فرستد (ادمین‌محور)."""
+    """کارت‌های لید/پیگیریِ باقی‌مانده‌ی انباشتی را به گروهِ پیگیری می‌فرستد (ادمین‌محور، دسته‌ای).
+
+    لیدهای رسیدگی‌نشده دسته‌به‌دسته (هر بار تا _REST_BATCH) و بدونِ تکرارِ همان‌روز فرستاده می‌شوند؛
+    پس با رسیدگی/زدنِ دوباره‌ی دکمه، دسته‌ی بعدیِ باقی‌مانده‌ها (از قدیمی‌ترین) می‌رود.
+    """
     await _safe_answer(q, "در حال ارسالِ باقی‌مانده‌ها…")
     group = _followup_group()
     if not group:
         await _safe_answer(q, "گروهِ پیگیری تنظیم نشده.", show_alert=True)
         return
+    today = clock.tehran_now().strftime("%Y-%m-%d")
     c = await _summary_counts()
     sent = 0
-    for d in (c["fu_remaining"] or [])[:60]:  # پیگیری‌های باقی‌مانده
+    for d in (c["fu_remaining"] or [])[:60]:  # پیگیری‌های سررسیدشده (dedup با next_follow_up)
         try:
             phone = d.get("phone") or ""
             await context.bot.send_message(group, _due_text(d), parse_mode=ParseMode.HTML,
                                            reply_markup=_due_kb(phone))
-            db.mark_due_sent(f"{phone}|{d.get('next_follow_up_gmt') or ''}")  # تا تکی دوباره نیاید
+            db.mark_due_sent(f"{phone}|{d.get('next_follow_up_gmt') or ''}")
             sent += 1
             await asyncio.sleep(0.4)
         except Exception as e:
             print(f"[restcards] پیگیری {d.get('phone')}: {e!r}")
-    for L in (c["nl_remaining"] or [])[:60]:  # لیدهای جدیدِ باقی‌مانده
+    nl_sent = 0
+    for L in (c["nl_remaining"] or []):  # لیدهای رسیدگی‌نشده — دسته‌ای و بدونِ تکرارِ همان‌روز
+        if nl_sent >= _REST_BATCH:
+            break
+        phone = L.get("phone") or ""
+        key = f"nl:{crm.normalize_phone(phone)}:{today}"
+        if not phone or db.due_sent(key):
+            continue
         try:
-            phone = L.get("phone") or ""
             await context.bot.send_message(group, _newlead_text(L), parse_mode=ParseMode.HTML,
                                            reply_markup=_newlead_kb(phone))
+            db.mark_due_sent(key)
+            nl_sent += 1
             sent += 1
             await asyncio.sleep(0.4)
         except Exception as e:
             print(f"[restcards] لید {L.get('phone')}: {e!r}")
+    remain = max(0, (c.get("nl_rem") or 0) - nl_sent)
+    tail = f"📤 {_fa(sent)} کارتِ باقی‌مانده به گروه ارسال شد."
+    if remain > 0:
+        tail += (f"\nهنوز ~{_fa(remain)} لیدِ رسیدگی‌نشده مانده؛ پس از رسیدگی یا با زدنِ دوباره‌ی دکمه، "
+                 "دسته‌ی بعدی (از قدیمی‌ترین) می‌رود.")
     try:
-        await context.bot.send_message(q.message.chat_id, f"📤 {_fa(sent)} کارتِ باقی‌مانده به گروه ارسال شد.")
+        await context.bot.send_message(q.message.chat_id, tail)
     except Exception:
         pass
 
@@ -759,7 +824,7 @@ def _newlead_text(L: dict) -> str:
     return (
         "🆕 <b>لیدِ جدید</b>\n"
         f"👤 {html.escape(L.get('name') or '—')} — <code>{html.escape(L.get('phone') or '')}</code>\n"
-        f"🔖 منبع: {html.escape(L.get('source') or '—')}  ·  🧑‍💼 مسئول: {html.escape(L.get('assigned_name') or '—')}\n"
+        f"🔖 منبع: {html.escape(crm.source_label(L.get('source')))}  ·  🧑‍💼 مسئول: {html.escape(L.get('assigned_name') or '—')}\n"
         f"🕒 {html.escape(L.get('created_local') or '')}"
     )
 
@@ -1157,6 +1222,41 @@ async def cmd_setfollowup(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await msg.reply_text(f"✅ این گروه به‌عنوان گروه پیگیری تنظیم شد (id={chat.id}).")
 
 
+async def cmd_fixcaptions(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """کپشنِ سفارش‌های قبلیِ گروه را با تفکیکِ تخفیفِ جدید به‌روزرسانی می‌کند (فقط مدیر، ملایم/ضدبلاک).
+
+    استفاده: /fixcaptions [روز]  (پیش‌فرض ۳۰ روزِ اخیر، سقفِ ۱۵۰ سفارش در هر اجرا).
+    """
+    msg = update.effective_message
+    user = update.effective_user
+    if not msg or not user or user.id not in config.ADMIN_USER_IDS:
+        return
+    import pipeline
+    days = 30
+    if context.args and str(context.args[0]).isdigit():
+        days = max(1, min(int(context.args[0]), 365))
+    ids = db.tracked_orders(time.time() - days * 86400)
+    cap = 150
+    note = ""
+    if len(ids) > cap:
+        ids = ids[:cap]
+        note = f" (سقفِ {_fa(cap)}؛ برای قدیمی‌ترها دوباره با روزِ کمتر اجرا کن)"
+    await msg.reply_text(
+        f"🔧 به‌روزرسانیِ کپشنِ {_fa(len(ids))} سفارشِ {_fa(days)} روزِ اخیر…{note}\nملایم انجام می‌شود (ضدبلاک).")
+    edited = 0
+    for oid in ids:
+        try:
+            before = (db.get_edit_row(oid) or (None, None, None, None, None))[3]
+            await pipeline.rebuild_and_edit(context.application, oid)
+            after = (db.get_edit_row(oid) or (None, None, None, None, None))[3]
+            if after != before:
+                edited += 1
+        except Exception as e:  # noqa: BLE001
+            print(f"[fixcaptions] {oid}: {e!r}")
+        await asyncio.sleep(1.5)  # فاصله‌ی ملایم (ضدبلاکِ سایت + ضدِفلادِ تلگرام)
+    await msg.reply_text(f"✅ تمام: {_fa(edited)} کپشن به‌روزرسانی شد از {_fa(len(ids))} سفارشِ بررسی‌شده.")
+
+
 def register_handlers(app: Application):
     app.add_handler(CommandHandler("start", cmd_menu))
     app.add_handler(CommandHandler("menu", cmd_menu))
@@ -1170,5 +1270,14 @@ def register_handlers(app: Application):
     app.add_handler(CommandHandler("report", worktasks.cmd_report))
     app.add_handler(CommandHandler("perf", worktasks.cmd_perf))
     app.add_handler(CommandHandler("perfmonth", worktasks.cmd_perfmonth))
+    app.add_handler(CommandHandler("igreport", igstats.cmd_igreport))
+    app.add_handler(CommandHandler("setigadmin", worktasks.cmd_setigadmin))
+    app.add_handler(CommandHandler("linkwp", worktasks.cmd_linkwp))
+    app.add_handler(CommandHandler("directives", worktasks.cmd_directives))
+    app.add_handler(CommandHandler("crawl", worktasks.cmd_crawl))
+    app.add_handler(CommandHandler("role", worktasks.cmd_role))
+    app.add_handler(CommandHandler("health", worktasks.cmd_health))
+    app.add_handler(CommandHandler("setup", worktasks.cmd_setup))
+    app.add_handler(CommandHandler("fixcaptions", cmd_fixcaptions))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.add_handler(CallbackQueryHandler(on_callback))

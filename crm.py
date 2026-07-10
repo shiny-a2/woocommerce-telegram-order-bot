@@ -42,6 +42,33 @@ def normalize_phone(raw) -> str:
     return digits
 
 
+_SOURCE_FA = {
+    "webchat": "چت سایت",
+    "website_popup": "پاپ‌آپ سایت",
+    "inperson_form": "مشتری حضوری",
+    "telegram_bot": "ربات تلگرام",
+    # منابعِ محتملِ دیگر (اگر افزونه اضافه کند)
+    "instagram": "اینستاگرام",
+    "whatsapp": "واتساپ",
+    "woocommerce": "سفارشِ سایت",
+    "order": "سفارشِ سایت",
+    "manual": "ثبتِ دستی",
+    "site": "سایت",
+    "chat": "چت سایت",
+    "popup": "پاپ‌آپ سایت",
+    "inperson": "مشتری حضوری",
+    "phone": "تماسِ تلفنی",
+}
+
+
+def source_label(source) -> str:
+    """منبعِ لید (انگلیسی) → برچسبِ فارسی. ناشناخته = همان مقدارِ خام (تا چیزی گم نشود)."""
+    raw = str(source or "").strip()
+    if not raw:
+        return "—"
+    return _SOURCE_FA.get(raw.lower(), raw)
+
+
 def _parse(r):
     """بدنه‌ی JSON را برمی‌گرداند حتی با وضعیتِ 4xx، اگر شاملِ کلیدِ ok باشد.
 
@@ -121,6 +148,16 @@ async def new_leads(since_id=0, limit=50) -> dict:
     if isinstance(data, dict):
         return data
     return {"leads": data or [], "max_id": 0}
+
+
+async def activity(user_id, date_from, date_to) -> dict:
+    """آمارِ فعالیتِ per-userِ ثبت‌شده در سایت (اندپوینتِ /activity افزونه، group=1).
+
+    خروجی: {"ok":true,"user_id","user_login","scope","counts":{action:count},"by_object":{type:count},"total"}.
+    برای صحت‌سنجیِ ادعای پرسنل (مثلاً «۱۰۰ محصول دسته‌بندی کردم») با کارِ واقعیِ ثبت‌شده.
+    """
+    return await asyncio.to_thread(
+        _get_sync, "/activity", {"user_id": user_id, "from": date_from, "to": date_to, "group": 1})
 
 
 async def due_leads(before=None, after=None, assigned_to=None, limit=50) -> list:
