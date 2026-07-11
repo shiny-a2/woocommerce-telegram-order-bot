@@ -32,18 +32,42 @@ def _e(v) -> str:
     return html.escape(str(v)) if v not in (None, "") else ""
 
 
+_FA = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+
+
+def _fa(n) -> str:
+    return str(n).translate(_FA)
+
+
+def _viewed_section(viewed: list) -> str:
+    """بخشِ «بازدید صفحات» برای کارت (خلاصه‌ی ۶‌تاییِ بالا؛ فهرستِ کامل پشتِ دکمه‌ی «دیده‌شده»)."""
+    L = [_LINE, f"🔗 <b>بازدید صفحات</b> ({_fa(len(viewed))})"]
+    for v in viewed[:6]:
+        nm = v.get("product") or v.get("name") or "—"
+        when = v.get("viewed_local") or v.get("viewed_at") or ""
+        cnt = v.get("count")
+        tail = (f" ×{_fa(cnt)}" if cnt else "") + (f" · <i>{_e(when)}</i>" if when else "")
+        L.append(f"• {_e(nm)}{tail}")
+    if len(viewed) > 6:
+        L.append(f"<i>… و {_fa(len(viewed) - 6)} موردِ دیگر (دکمه‌ی «👁️ دیده‌شده»).</i>")
+    return "\n".join(L)
+
+
 def is_followup(data: dict) -> bool:
     """آیا این لید در وضعیتِ پیگیری است؟ (برای مسیریابی به گروهِ مخصوص)"""
     lead = (data or {}).get("lead") or {}
     return lead.get("status") == "follow_up"
 
 
-def render_profile(data: dict) -> str:
-    """خروجیِ /tg/profile → متنِ کارت (HTML)."""
+def render_profile(data: dict, viewed: list | None = None) -> str:
+    """خروجیِ /tg/profile → متنِ کارت (HTML). viewed = بازدیدِ صفحاتِ مشتری (از /viewed)."""
     if not data or not data.get("ok"):
         return "⚠️ خطا در دریافت اطلاعات CRM."
     if not data.get("found"):
-        return f"🔍 برای شماره‌ی <code>{_e(data.get('phone'))}</code> رکوردی در CRM پیدا نشد."
+        msg = f"🔍 برای شماره‌ی <code>{_e(data.get('phone'))}</code> رکوردی در CRM پیدا نشد."
+        if viewed:  # حتی بدونِ رکوردِ لید، بازدیدِ صفحات را نشان بده (نیتِ خرید)
+            msg += "\n" + _viewed_section(viewed)
+        return msg
 
     c = data.get("contact") or {}
     m = data.get("meta") or {}
@@ -118,6 +142,9 @@ def render_profile(data: dict) -> str:
         for s in slog[:5]:
             lbl = _e(s.get("status_label") or s.get("status"))
             L.append(f"• <i>{_e(s.get('created_local'))}</i> — {lbl} ← {_e(s.get('author'))}")
+
+    if viewed:
+        L.append(_viewed_section(viewed))
 
     L.append(_LINE)
     L.append("💬 <i>برای ثبتِ یادداشت، روی همین پیام ریپلای کن و متن را بنویس.</i>")

@@ -284,11 +284,20 @@ def _actor_name(user) -> str:
 
 
 async def _crm_card(phone):
-    """(متنِ کارت، کیبورد) — اگر رکورد پیدا شد کیبوردِ اقدام، وگرنه فقط بروزرسانی/بستن."""
+    """(متنِ کارت، کیبورد) — پروفایل + بازدیدِ صفحاتِ مشتری همزمان؛ اگر رکورد پیدا شد کیبوردِ اقدام."""
     try:
-        prof = await crm.get_profile(phone)
-        text = crm_view.render_profile(prof)
-        kb = crm_view.action_kb(phone) if prof.get("found") else crm_view.read_kb(phone)
+        prof_r, viewed_r = await asyncio.gather(
+            crm.get_profile(phone),
+            crm.viewed_products(phone, limit=25),
+            return_exceptions=True,
+        )
+        if isinstance(prof_r, Exception):
+            raise prof_r
+        viewed = viewed_r if isinstance(viewed_r, list) else []
+        if not isinstance(viewed_r, list):  # واکشیِ بازدید نباید کارت را بشکند
+            print(f"[crm] viewed(card) {phone}: {viewed_r!r}")
+        text = crm_view.render_profile(prof_r, viewed=viewed)
+        kb = crm_view.action_kb(phone) if prof_r.get("found") else crm_view.read_kb(phone)
     except Exception as e:
         print(f"[crm] دریافتِ پروفایلِ {phone}: {e!r}")
         text = "⚠️ خطا در دریافت اطلاعاتِ CRM. کمی بعد دوباره امتحان کن."

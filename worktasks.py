@@ -1298,7 +1298,8 @@ async def cmd_crawl(update, context):
 
 
 async def maybe_auto_crawl(app):
-    """خزشِ خودکارِ روزانه (یک‌بار، داخلِ شیفت): مشکلات را پیدا، خودکار می‌سپارد و به مدیران گزارش می‌دهد.
+    """خزشِ خودکارِ اولِ شیفت (یک‌بار در روز): مشکلات را پیدا، خودکار به مسئول‌ها می‌سپارد و
+    تسک‌ها را در «گروهِ کار» درج می‌کند تا تیم اولِ شیفت ببیند (فالبک: پیویِ مدیران).
 
     ضدبلاک: فقط یک‌بار در روز و از همان کلاینت‌های ملایمِ خزش (که به circuit-breaker احترام می‌گذارند).
     """
@@ -1312,8 +1313,19 @@ async def maybe_auto_crawl(app):
     db.set_meta("last_auto_crawl", today)
     try:
         text, n = await _run_crawl(0, "🤖 خزشِ خودکار")
-        await _send_managers(app.bot, "🕘 <b>خزشِ خودکارِ امروز</b>\n\n" + text)
-        print(f"[worktasks] خزشِ خودکار: {_fa(n)} تسک سپرده شد.")
+        body = "🕘 <b>خزشِ اولِ شیفت — تسک‌های امروز</b>\n\n" + text
+        wg = _workgroup()
+        sent_group = False
+        if wg:
+            try:
+                await app.bot.send_message(wg, body, parse_mode=ParseMode.HTML)
+                sent_group = True
+            except Exception as e:  # noqa: BLE001
+                print(f"[worktasks] درجِ خزش در گروهِ کار ناموفق: {e!r}")
+        if not sent_group:  # فالبک: گروهِ کار ثبت نشده یا ارسال نشد → به مدیران
+            await _send_managers(app.bot, body)
+        print(f"[worktasks] خزشِ اولِ شیفت: {_fa(n)} تسک سپرده شد "
+              f"({'گروهِ کار' if sent_group else 'مدیران'}).")
     except Exception as e:  # noqa: BLE001
         print(f"[worktasks] خزشِ خودکار ناموفق: {e!r}")
 
