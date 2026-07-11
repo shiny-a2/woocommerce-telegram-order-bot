@@ -74,6 +74,15 @@ def init():
             ts           REAL
         )"""
     )
+    _conn.execute(
+        """CREATE TABLE IF NOT EXISTS crm_newcards (
+            phone      TEXT,
+            chat_id    INTEGER,
+            message_id INTEGER,
+            updated_ts REAL,
+            PRIMARY KEY (phone, chat_id)
+        )"""
+    )
     _conn.commit()
 
 
@@ -145,6 +154,38 @@ def set_meta(key, value):
     with _lock:
         _conn.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?,?)", (key, str(value)))
         _conn.commit()
+
+
+# ---------- کارت‌های «لیدِ جدید» در گروه (dedup: یک کارت به‌ازای هر شماره در هر چت) ----------
+def newcard_get(phone, chat_id):
+    with _lock:
+        row = _conn.execute(
+            "SELECT message_id FROM crm_newcards WHERE phone=? AND chat_id=?", (str(phone), int(chat_id))
+        ).fetchone()
+        return row[0] if row else None
+
+
+def newcard_set(phone, chat_id, message_id):
+    with _lock:
+        _conn.execute(
+            "INSERT OR REPLACE INTO crm_newcards(phone, chat_id, message_id, updated_ts) VALUES (?,?,?,?)",
+            (str(phone), int(chat_id), int(message_id), time.time()),
+        )
+        _conn.commit()
+
+
+def newcard_delete(phone, chat_id):
+    with _lock:
+        _conn.execute("DELETE FROM crm_newcards WHERE phone=? AND chat_id=?", (str(phone), int(chat_id)))
+        _conn.commit()
+
+
+def newcard_phones(chat_id):
+    """[(phone, message_id)] همه‌ی کارت‌های ثبت‌شده در این چت."""
+    with _lock:
+        return _conn.execute(
+            "SELECT phone, message_id FROM crm_newcards WHERE chat_id=?", (int(chat_id),)
+        ).fetchall()
 
 
 def count_orders() -> int:

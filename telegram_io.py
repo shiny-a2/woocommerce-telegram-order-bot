@@ -551,6 +551,154 @@ async def cmd_crm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await wait.edit_text(text, parse_mode=ParseMode.HTML, reply_markup=kb)
 
 
+# ---------- «/newleads»: بوردِ لیدهای «جدید»ِ ۳۰ روزِ اخیر در گروه (dedup) ----------
+_NEWCARD_DELAY = 2.5           # ثانیه بین ارسال‌ها (رعایتِ سقفِ نرخِ گروهِ تلگرام ~۲۰/دقیقه)
+_NEWCARD_CAP = 800            # سقفِ ایمنی برای جلوگیری از فلادِ ناخواسته
+_newcards_running: set = set()
+
+
+async def _nl_retry(since_id, limit):
+    """/new-leads با تحملِ dropِ گذرای سایت."""
+    for a in range(3):
+        try:
+            return await crm.new_leads(since_id=since_id, limit=limit)
+        except Exception as e:  # noqa: BLE001
+            print(f"[newcards] new_leads retry {a}: {type(e).__name__}")
+            await asyncio.sleep(1.2 * (a + 1))
+    return {}
+
+
+async def _collect_new_leads_30d():
+    """لیدهایی که «وضعیتِ فعلی‌شان new» است و در ۳۰ روزِ اخیر ساخته شده‌اند (قدیمی‌تر→جدیدتر).
+
+    /new-leads صعودی بر اساسِ id است (سقفِ ۲۰۰) و فیلترِ status/تاریخِ سمتِ سرور ندارد؛ از بالا
+    (جدیدترین) بلاک‌به‌بلاک تا عبور از مرزِ ۳۰ روز خزیده و اینجا فیلتر می‌شود.
+    """
+    cutoff = (jdatetime.date.today() - datetime.timedelta(days=30)).strftime("%Y-%m-%d")
+    first = await _nl_retry(2_000_000_000, 1)
+    mx = int((first or {}).get("max_id") or 0)
+    if not mx:
+        return []
+    collected, hi, scanned = {}, mx, 0
+    while hi > 0 and scanned < 6000:
+        lo = max(0, hi - 200)
+        r = await _nl_retry(lo, 200)
+        ls = r.get("leads", []) if isinstance(r, dict) else []
+        if not ls:
+            break
+        scanned += len(ls)
+        for l in ls:
+            collected[l.get("id")] = l
+        oldest = min(ls, key=lambda x: x.get("id") or 0)
+        if (oldest.get("created_local") or "") < cutoff:
+            break
+        hi = lo
+    new30 = [l for l in collected.values()
+             if l.get("status") == "new" and (l.get("created_local") or "") >= cutoff]
+    new30.sort(key=lambda l: l.get("id") or 0)
+    return new30
+
+
+async def _safe_delete(bot, chat_id, message_id):
+    try:
+        await bot.delete_message(chat_id, message_id)
+    except Exception:  # noqa: BLE001 — ممکن است دستی پاک شده باشد
+        pass
+
+
+async def _send_newcard(bot, chat_id, lead, phone):
+    from telegram.error import RetryAfter
+    for _ in range(2):
+        try:
+            return await bot.send_message(chat_id, _newlead_text(lead), parse_mode=ParseMode.HTML,
+                                          reply_markup=_newlead_kb(phone))
+        except RetryAfter as e:  # سقفِ نرخ → همان‌قدر صبر و یک تلاشِ دیگر
+            await asyncio.sleep(float(getattr(e, "retry_after", 5)) + 1)
+        except Exception as e:  # noqa: BLE001
+            print(f"[newcards] send {phone}: {e!r}")
+            return None
+    return None
+
+
+async def _sync_newcards(bot, chat_id, leads, header):
+    """گروه را با «لیدهای فعلاً جدید» هماهنگ می‌کند؛ هر مشتری فقط یک کارت (بدونِ تکرار):
+    شماره‌ای که دیگر جدید نیست→کارتش پاک؛ شماره‌ای که کارتِ زنده دارد→دست‌نخورده؛ شماره‌ی تازه→کارتِ نو.
+    خروجی: (تازه، ازقبل‌موجود، حذف‌شده).
+    """
+    current = {}
+    for l in leads:
+        p = crm.normalize_phone(l.get("phone"))
+        if p:
+            current.setdefault(p, l)
+    prev = {p: mid for (p, mid) in db.newcard_phones(chat_id)}
+
+    removed = 0
+    for p, mid in prev.items():
+        if p not in current:  # دیگر جدید نیست → پاک
+            await _safe_delete(bot, chat_id, mid)
+            db.newcard_delete(p, chat_id)
+            removed += 1
+
+    to_post = [(p, l) for p, l in current.items() if p not in prev]
+    kept = len(current) - len(to_post)
+    posted, total = 0, len(to_post)
+    for i, (p, l) in enumerate(to_post, 1):
+        m = await _send_newcard(bot, chat_id, l, p)
+        if m:
+            db.newcard_set(p, chat_id, m.message_id)
+            posted += 1
+        await asyncio.sleep(_NEWCARD_DELAY)
+        if i % 20 == 0:
+            try:
+                await header.edit_text(f"📤 در حال ارسالِ کارت‌ها… {worktasks._fa(i)}/{worktasks._fa(total)}")
+            except Exception:  # noqa: BLE001
+                pass
+    return posted, kept, removed
+
+
+async def cmd_newcards(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """‎/newleads → کارتِ لیدهایی که «آخرین وضعیتشان جدید» است و در ۳۰ روزِ اخیر ساخته شده‌اند را
+    در همین گروه به‌صورتِ بوردِ بدونِ‌تکرار نگه می‌دارد (تماس‌گرفته‌ها حذف، تازه‌ها اضافه)."""
+    msg = update.effective_message
+    chat = update.effective_chat
+    if not msg or not chat:
+        return
+    if not (_authorized(update) or chat.id == _followup_group()):
+        return
+    if not crm.enabled():
+        await msg.reply_text("اتصال CRM فعال نیست.")
+        return
+    if chat.id in _newcards_running:
+        await msg.reply_text("⏳ ارسالِ لیدهای جدید همین حالا در جریان است؛ تا پایان صبر کن.")
+        return
+    _newcards_running.add(chat.id)
+    header = await msg.reply_text("📋 در حال جمع‌آوریِ لیدهای «جدید»ِ ۳۰ روزِ اخیر…")
+    try:
+        leads = await _collect_new_leads_30d()
+        if len(leads) > _NEWCARD_CAP:
+            leads = leads[-_NEWCARD_CAP:]
+        est = max(1, round(len(leads) * _NEWCARD_DELAY / 60))
+        await header.edit_text(
+            f"📤 {worktasks._fa(len(leads))} لیدِ «جدید» — ارسالِ کارت‌ها"
+            f" (ممکن است تا ~{worktasks._fa(est)} دقیقه طول بکشد)…")
+        posted, kept, removed = await _sync_newcards(context.bot, chat.id, leads, header)
+        await header.edit_text(
+            "✅ <b>بوردِ لیدهای «جدید»ِ ۳۰ روزِ اخیر به‌روز شد.</b>\n"
+            f"🆕 کارتِ تازه: {worktasks._fa(posted)}\n"
+            f"✅ از قبل موجود (تکراری نشد): {worktasks._fa(kept)}\n"
+            f"🗑️ حذفِ کارتِ لیدهایی که دیگر جدید نیستند: {worktasks._fa(removed)}\n"
+            f"📊 مجموعِ لیدهای «جدید»: {worktasks._fa(len(leads))}",
+            parse_mode=ParseMode.HTML)
+    except Exception as e:  # noqa: BLE001
+        print(f"[newcards] {e!r}")
+        try:
+            await header.edit_text(f"ارسالِ لیدهای جدید ناموفق: {type(e).__name__}")
+        except Exception:  # noqa: BLE001
+            pass
+    finally:
+        _newcards_running.discard(chat.id)
+
+
 async def _handle_lead(q):
     try:
         _, action, oid = q.data.split(":")
@@ -1273,6 +1421,7 @@ def register_handlers(app: Application):
     app.add_handler(CommandHandler("setfollowup", cmd_setfollowup))
     app.add_handler(CommandHandler("range", cmd_range))
     app.add_handler(CommandHandler("crm", cmd_crm))
+    app.add_handler(CommandHandler("newleads", cmd_newcards))
     app.add_handler(CommandHandler("setworkgroup", worktasks.cmd_setworkgroup))
     app.add_handler(CommandHandler("work", worktasks.cmd_work))
     app.add_handler(CommandHandler("tasks", worktasks.cmd_tasks))
