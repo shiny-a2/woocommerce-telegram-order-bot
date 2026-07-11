@@ -554,6 +554,7 @@ async def cmd_crm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ---------- «/newleads»: بوردِ لیدهای «جدید»ِ ۳۰ روزِ اخیر در گروه (dedup) ----------
 _NEWCARD_DELAY = 2.5           # ثانیه بین ارسال‌ها (رعایتِ سقفِ نرخِ گروهِ تلگرام ~۲۰/دقیقه)
 _NEWCARD_CAP = 800            # سقفِ ایمنی برای جلوگیری از فلادِ ناخواسته
+_POPUP_SOURCES = {"website_popup", "popup"}  # پاپ‌آپِ ناشناسِ سایت (کم‌تعامل) — پیش‌فرض حذف
 _newcards_running: set = set()
 
 
@@ -568,11 +569,12 @@ async def _nl_retry(since_id, limit):
     return {}
 
 
-async def _collect_new_leads_30d():
+async def _collect_new_leads_30d(include_popup=False):
     """لیدهایی که «وضعیتِ فعلی‌شان new» است و در ۳۰ روزِ اخیر ساخته شده‌اند (قدیمی‌تر→جدیدتر).
 
     /new-leads صعودی بر اساسِ id است (سقفِ ۲۰۰) و فیلترِ status/تاریخِ سمتِ سرور ندارد؛ از بالا
     (جدیدترین) بلاک‌به‌بلاک تا عبور از مرزِ ۳۰ روز خزیده و اینجا فیلتر می‌شود.
+    پیش‌فرض: پاپ‌آپِ ناشناسِ سایت حذف می‌شود (فقط لیدهای باتعامل)؛ include_popup=True همه را می‌آورد.
     """
     cutoff = (jdatetime.date.today() - datetime.timedelta(days=30)).strftime("%Y-%m-%d")
     first = await _nl_retry(2_000_000_000, 1)
@@ -594,9 +596,38 @@ async def _collect_new_leads_30d():
             break
         hi = lo
     new30 = [l for l in collected.values()
-             if l.get("status") == "new" and (l.get("created_local") or "") >= cutoff]
+             if l.get("status") == "new" and (l.get("created_local") or "") >= cutoff
+             and (include_popup or (l.get("source") or "").lower() not in _POPUP_SOURCES)]
     new30.sort(key=lambda l: l.get("id") or 0)
     return new30
+
+
+async def _filter_untouched(leads, header=None):
+    """فقط لیدهایی که هیچ اکشنی رویشان ثبت نشده: بدونِ یادداشت/تاریخچهٔ وضعیت/تماس.
+
+    نیاز به /profile به‌ازای هر لید دارد؛ چون مجموعهٔ باتعامل کوچک است به‌صرفه است.
+    خطای API → لید نگه‌داشته می‌شود (در تردید حذف نکن).
+    """
+    out, total = [], len(leads)
+    for i, l in enumerate(leads, 1):
+        ph = crm.normalize_phone(l.get("phone"))
+        try:
+            p = await crm.get_profile(ph)
+            lead = p.get("lead") or {}
+            touched = (bool(p.get("notes")) or bool(p.get("status_log"))
+                       or bool((lead.get("last_contact_at") or "").strip())
+                       or bool((lead.get("notes_freetext") or "").strip()))
+            if not touched:
+                out.append(l)
+        except Exception:  # noqa: BLE001 — در تردید نگه‌دار
+            out.append(l)
+        if header is not None and i % 15 == 0:
+            try:
+                await header.edit_text(f"🔎 در حال بررسیِ دست‌نخورده‌بودن… {worktasks._fa(i)}/{worktasks._fa(total)}")
+            except Exception:  # noqa: BLE001
+                pass
+        await asyncio.sleep(0.2)
+    return out
 
 
 async def _safe_delete(bot, chat_id, message_id):
@@ -657,8 +688,9 @@ async def _sync_newcards(bot, chat_id, leads, header):
 
 
 async def cmd_newcards(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """‎/newleads → کارتِ لیدهایی که «آخرین وضعیتشان جدید» است و در ۳۰ روزِ اخیر ساخته شده‌اند را
-    در همین گروه به‌صورتِ بوردِ بدونِ‌تکرار نگه می‌دارد (تماس‌گرفته‌ها حذف، تازه‌ها اضافه)."""
+    """‎/newleads → کارتِ لیدهایی که «آخرین وضعیتشان جدید» است، در ۳۰ روزِ اخیر ساخته شده‌اند،
+    از منبعِ باتعامل‌اند (نه پاپ‌آپِ ناشناس) و «هیچ اکشنی رویشان نشده» را در همین گروه به‌صورتِ
+    بوردِ بدونِ‌تکرار نگه می‌دارد. «/newleads all» پاپ‌آپ‌ها را هم (بدونِ فیلترِ اکشن) می‌آورد."""
     msg = update.effective_message
     chat = update.effective_chat
     if not msg or not chat:
@@ -671,23 +703,28 @@ async def cmd_newcards(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat.id in _newcards_running:
         await msg.reply_text("⏳ ارسالِ لیدهای جدید همین حالا در جریان است؛ تا پایان صبر کن.")
         return
+    arg = ((context.args or [""])[0] or "").strip().lower()
+    include_all = arg in ("all", "همه", "popup", "پاپ‌اپ", "پاپ‌آپ")
+    mode = "همه (با پاپ‌آپ)" if include_all else "باتعامل و دست‌نخورده"
     _newcards_running.add(chat.id)
-    header = await msg.reply_text("📋 در حال جمع‌آوریِ لیدهای «جدید»ِ ۳۰ روزِ اخیر…")
+    header = await msg.reply_text(f"📋 جمع‌آوریِ لیدهای «جدید»ِ ۳۰ روزِ اخیر — {mode}…")
     try:
-        leads = await _collect_new_leads_30d()
+        leads = await _collect_new_leads_30d(include_popup=include_all)
+        if not include_all:  # فقط دست‌نخورده‌ها (بدونِ هیچ اکشن)؛ چون مجموعهٔ باتعامل کوچک است به‌صرفه است
+            leads = await _filter_untouched(leads, header)
         if len(leads) > _NEWCARD_CAP:
             leads = leads[-_NEWCARD_CAP:]
         est = max(1, round(len(leads) * _NEWCARD_DELAY / 60))
         await header.edit_text(
-            f"📤 {worktasks._fa(len(leads))} لیدِ «جدید» — ارسالِ کارت‌ها"
-            f" (ممکن است تا ~{worktasks._fa(est)} دقیقه طول بکشد)…")
+            f"📤 {worktasks._fa(len(leads))} لیدِ «جدید»ِ {mode} — ارسالِ کارت‌ها (~{worktasks._fa(est)} دقیقه)…")
         posted, kept, removed = await _sync_newcards(context.bot, chat.id, leads, header)
         await header.edit_text(
-            "✅ <b>بوردِ لیدهای «جدید»ِ ۳۰ روزِ اخیر به‌روز شد.</b>\n"
+            f"✅ <b>بوردِ لیدهای «جدید»ِ ۳۰ روزِ اخیر ({mode}) به‌روز شد.</b>\n"
             f"🆕 کارتِ تازه: {worktasks._fa(posted)}\n"
             f"✅ از قبل موجود (تکراری نشد): {worktasks._fa(kept)}\n"
             f"🗑️ حذفِ کارتِ لیدهایی که دیگر جدید نیستند: {worktasks._fa(removed)}\n"
-            f"📊 مجموعِ لیدهای «جدید»: {worktasks._fa(len(leads))}",
+            f"📊 مجموعِ لیدهای واجدِ شرایط: {worktasks._fa(len(leads))}\n"
+            f"<i>برای دیدنِ پاپ‌آپ‌ها هم: /newleads all</i>",
             parse_mode=ParseMode.HTML)
     except Exception as e:  # noqa: BLE001
         print(f"[newcards] {e!r}")

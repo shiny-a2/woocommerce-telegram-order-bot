@@ -84,7 +84,7 @@ _COMMANDS = [
     BotCommand("tasks", "تسک‌های من"),
     BotCommand("report", "ثبت گزارش کار روزانه"),
     BotCommand("crm", "کارت مشتری — مثل: /crm 0912…"),
-    BotCommand("newleads", "کارت لیدهای «جدید» ۳۰ روز اخیر در گروه"),
+    BotCommand("newleads", "کارت لیدهای جدیدِ باتعاملِ دست‌نخورده (۳۰ روز)"),
     BotCommand("range", "گزارش فروش در بازه‌ی شمسی"),
     BotCommand("perf", "کارت عملکرد تیم امروز (مدیر)"),
     BotCommand("perfmonth", "روند ماهانه‌ی عملکرد (مدیر)"),
