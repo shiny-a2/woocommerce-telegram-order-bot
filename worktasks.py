@@ -118,6 +118,10 @@ def wt_init():
             db._conn.execute("ALTER TABLE wt_staff ADD COLUMN role_desc TEXT")
         except sqlite3.OperationalError:
             pass
+        try:  # کلیدِ دسته‌ی مشکلِ خزش روی تسک (برای جلوگیری از تسکِ تکراریِ همان مشکل)
+            db._conn.execute("ALTER TABLE wt_tasks ADD COLUMN source_key TEXT")
+        except sqlite3.OperationalError:
+            pass
         db._conn.commit()
     print("[worktasks] جدول‌های گزارشِ کار آماده شد.")
 
@@ -187,15 +191,43 @@ def _staff_roles():
 
 
 # ---------- تسک‌ها ----------
-def _add_task(assignee_id, assignee_name, assigner_id, assigner_name, text) -> int:
+def _add_task(assignee_id, assignee_name, assigner_id, assigner_name, text, source_key=None) -> int:
     with db._lock:
         cur = db._conn.execute(
-            """INSERT INTO wt_tasks(assignee_id, assignee_name, assigner_id, assigner_name, text, status, created_ts)
-               VALUES (?,?,?,?,?, 'open', ?)""",
-            (assignee_id, assignee_name, assigner_id, assigner_name, text, time.time()),
+            """INSERT INTO wt_tasks(assignee_id, assignee_name, assigner_id, assigner_name, text, status,
+                                    created_ts, source_key)
+               VALUES (?,?,?,?,?, 'open', ?, ?)""",
+            (assignee_id, assignee_name, assigner_id, assigner_name, text, time.time(), source_key),
         )
         db._conn.commit()
         return cur.lastrowid
+
+
+def _open_crawl_keys() -> set:
+    """کلیدهای دسته‌ای که همین حالا تسکِ بازِ خزش دارند (برای جلوگیری از تکرارِ همان مشکل)."""
+    with db._lock:
+        rows = db._conn.execute(
+            "SELECT DISTINCT source_key FROM wt_tasks "
+            "WHERE status='open' AND source_key IS NOT NULL AND source_key<>''"
+        ).fetchall()
+    return {r[0] for r in rows}
+
+
+def _words(s):
+    for ch in "،—:/().,؛«»\"":
+        s = (s or "").replace(ch, " ")
+    return {w for w in s.split() if len(w) >= 3}
+
+
+def _match_key(task_text, issues) -> str:
+    """کلیدِ نزدیک‌ترین مشکل به متنِ تسکِ ساخته‌شده (بر اساسِ هم‌پوشانیِ واژه‌ها). خالی اگر پیدا نشد."""
+    tw = _words(task_text)
+    best, best_ov = "", 0
+    for i in issues:
+        ov = len(tw & _words(i.get("text")))
+        if ov > best_ov:
+            best, best_ov = i.get("key") or "", ov
+    return best
 
 
 def _open_tasks(user_id):
@@ -1246,27 +1278,34 @@ async def cmd_role(update, context):
 async def _run_crawl(actor_id, actor_name):
     """خزش + اساینِ خودکارِ تسک‌ها طبقِ شرحِ وظایف. خروجی: (متنِ گزارشِ HTML، تعدادِ اساین‌شده). مشترکِ /crawl و خزشِ خودکار."""
     import crawler
-    issues, notes = await crawler.collect()
+    issues, notes = await crawler.collect()  # هر issue = {"key","text"}
     lines = ["🔎 <b>خزشِ مشکلات</b>", ""]
     n_assigned = 0
+    open_keys = _open_crawl_keys()
+    fresh = [i for i in issues if (i.get("key") or "") not in open_keys]
+    already = [i for i in issues if (i.get("key") or "") in open_keys]
     if not issues:
         lines.append("مشکلِ عملی‌ای پیدا نشد ✅")
+    elif not fresh:
+        lines.append(f"مشکلِ تازه‌ای نبود؛ {_fa(len(already))} مورد از قبل تسکِ باز دارند (تکرار نشد) ✅")
     else:
         staff = _staff_roles()
-        routes = (await wt_brain.route_issues(issues, [{"name": n, "role": d} for _u, n, d in staff])
+        routes = (await wt_brain.route_issues([i["text"] for i in fresh],
+                                              [{"name": n, "role": d} for _u, n, d in staff])
                   if staff else [])
         name2uid = {n: u for u, n, d in staff}
         assigned, pending = [], []
         if routes:
             for a in routes:
                 nm = a.get("assignee")
+                key = _match_key(a.get("task_text", ""), fresh)
                 if nm and nm in name2uid:
-                    _add_task(name2uid[nm], nm, actor_id, actor_name, a["task_text"])
+                    _add_task(name2uid[nm], nm, actor_id, actor_name, a["task_text"], source_key=key)
                     assigned.append(f"• {html.escape(a['task_text'])} → <b>{html.escape(nm)}</b>")
                 else:
                     pending.append(f"• {html.escape(a['task_text'])}")
         else:
-            pending = [f"• {html.escape(i)}" for i in issues]
+            pending = [f"• {html.escape(i['text'])}" for i in fresh]
         n_assigned = len(assigned)
         if assigned:
             lines.append(f"✅ <b>{_fa(len(assigned))} تسک خودکار سپرده شد</b> (طبقِ شرحِ وظایف):")
@@ -1277,6 +1316,9 @@ async def _run_crawl(actor_id, actor_name):
             lines.append("🕗 <b>نیازِ اساینِ دستی</b> (مسئولش مشخص نبود):")
             lines += pending
             lines.append("<i>برای سپردن، روی همین پیام ریپلای بزن و بگو «به {نام} بده».</i>")
+        if already:
+            lines.append("")
+            lines.append(f"🔁 <i>{_fa(len(already))} مشکل از قبل تسکِ باز دارد؛ دوباره ساخته نشد.</i>")
     if notes:
         lines += ["", "⚠️ " + "؛ ".join(html.escape(n) for n in notes)]
     return "\n".join(lines), n_assigned

@@ -8,7 +8,8 @@
   → صفر ریسکِ بلاکِ اینستاگرام.
 - فقط دستی (با /crawl) اجرا می‌شود، نه خودکار.
 
-خروجیِ collect(): (issues, notes) — issues رشته‌های عملیِ ساده (برای اساین)، notes پیام‌های «در دسترس نیست».
+خروجیِ collect(): (issues, notes) — هر issue یک {"key","text"} (key = دسته‌ی پایدارِ مشکل، برای جلوگیری
+از تسکِ تکراری)، notes پیام‌های «در دسترس نیست».
 """
 from __future__ import annotations
 
@@ -32,9 +33,11 @@ async def _site():
         return [], f"محصولاتِ سایت موقتاً در دسترس نیست ({type(e).__name__})"
     issues = []
     if oos:
-        issues.append(f"{_fa(oos)} محصولِ منتشرشده‌ی ناموجود در سایت — بررسی/شارژِ موجودی یا مخفی‌کردن")
+        issues.append({"key": "oos",
+                       "text": f"{_fa(oos)} محصولِ منتشرشده‌ی ناموجود در سایت — بررسی/شارژِ موجودی یا مخفی‌کردن"})
     if drafts:
-        issues.append(f"{_fa(drafts)} محصولِ پیش‌نویسِ ناتمام — تکمیل و انتشار")
+        issues.append({"key": "drafts",
+                       "text": f"{_fa(drafts)} محصولِ پیش‌نویسِ ناتمام — تکمیل و انتشار"})
     return issues, ""
 
 
@@ -51,7 +54,7 @@ async def _crm():
     except Exception as e:  # noqa: BLE001
         return [], f"CRM موقتاً در دسترس نیست ({type(e).__name__})"
     n = len(due or [])
-    return ([f"{_fa(n)} مشتریِ CRM با پیگیریِ سررسیدشده — تماس/پیگیری"] if n else []), ""
+    return ([{"key": "crm_due", "text": f"{_fa(n)} مشتریِ CRM با پیگیریِ سررسیدشده — تماس/پیگیری"}] if n else []), ""
 
 
 async def _ig():
@@ -63,12 +66,15 @@ async def _ig():
         return [], "آنالیزِ اینستاگرام فعلاً در دسترس نیست"
     issues = []
     if (r.get("posts_24h") or 0) == 0:
-        issues.append("امروز هیچ پستی در اینستاگرام گذاشته نشده — یک پست/استوریِ محصول بگذار")
+        issues.append({"key": "ig_nopost",
+                       "text": "امروز هیچ پستی در اینستاگرام گذاشته نشده — یک پست/استوریِ محصول بگذار"})
     g = r.get("growth_1d")
     if g is not None and g < 0:
-        issues.append(f"رشدِ فالوورِ اینستاگرامِ امروز منفی ({_fa(g)}) — یک اقدامِ جذب (ریلز/استوریِ تعاملی)")
+        issues.append({"key": "ig_neg_growth",
+                       "text": f"رشدِ فالوورِ اینستاگرامِ امروز منفی ({_fa(g)}) — یک اقدامِ جذب (ریلز/استوریِ تعاملی)"})
     if r.get("best_reach_post") or r.get("best_post"):
-        issues.append("بهترین پستِ اخیرِ اینستاگرام را دوباره پروموت/استوری کن")
+        issues.append({"key": "ig_promote",
+                       "text": "بهترین پستِ اخیرِ اینستاگرام را دوباره پروموت/استوری کن"})
     return issues, ""
 
 
