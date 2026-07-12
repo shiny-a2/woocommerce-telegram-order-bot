@@ -244,6 +244,7 @@ def _lead_kb(oid, phone=None):
     p = crm.normalize_phone(phone or "")
     if p and crm.enabled():
         rows.append([crm_view.open_button(p)])
+    rows.append([InlineKeyboardButton("✖️ بستن", callback_data="crm:close")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -1010,7 +1011,8 @@ def _due_text(d: dict) -> str:
 
 
 def _due_kb(phone: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[crm_view.open_button(crm.normalize_phone(phone))]])
+    return InlineKeyboardMarkup([[crm_view.open_button(crm.normalize_phone(phone)),
+                                  InlineKeyboardButton("✖️ بستن", callback_data="crm:close")]])
 
 
 def _newlead_text(L: dict) -> str:
@@ -1033,6 +1035,7 @@ def _newlead_kb(phone: str) -> InlineKeyboardMarkup:
          InlineKeyboardButton("🎯 پیشنهاد", callback_data=f"crm:recommend:{p}")],
         [InlineKeyboardButton("⏰ فردا پیگیری", callback_data=f"crm:setfu:{p}:1"),
          InlineKeyboardButton("👤 کارت کامل", callback_data=f"crm:open:{p}")],
+        [InlineKeyboardButton("✖️ بستن", callback_data="crm:close")],
     ])
 
 
