@@ -109,7 +109,8 @@ def wt_init():
         )
         for col in ("ai_questions TEXT", "ai_answers TEXT", "ai_score INTEGER", "ai_summary TEXT",
                     "ai_flags TEXT", "ai_remaining TEXT", "ai_blockers TEXT", "ai_tasks TEXT", "kind TEXT",
-                    "ai_carryover TEXT", "ai_growth TEXT"):
+                    "ai_carryover TEXT", "ai_growth TEXT",
+                    "work_date TEXT", "check_in TEXT", "check_out TEXT", "worked_min INTEGER"):
             try:
                 db._conn.execute(f"ALTER TABLE wt_reports ADD COLUMN {col}")
             except sqlite3.OperationalError:
@@ -314,15 +315,60 @@ def _edit_task(tid, new_text):
     return r
 
 
-def _add_report(user_id, name, text, kind="work") -> int:
+def _add_report(user_id, name, text, kind="work", attendance=None) -> int:
     day = clock.tehran_now().strftime("%Y-%m-%d")
+    a = attendance or {}
     with db._lock:
         cur = db._conn.execute(
-            "INSERT INTO wt_reports(user_id, user_name, day, text, created_ts, kind) VALUES (?,?,?,?,?,?)",
-            (user_id, name, day, text, time.time(), kind),
+            "INSERT INTO wt_reports(user_id, user_name, day, text, created_ts, kind, "
+            "work_date, check_in, check_out, worked_min) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (user_id, name, day, text, time.time(), kind,
+             a.get("work_date"), a.get("check_in"), a.get("check_out"), a.get("worked_min")),
         )
         db._conn.commit()
         return cur.lastrowid
+
+
+_FA_NUM = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
+
+
+def _parse_attendance(text):
+    """ساعتِ ورود–خروج و تاریخِ کارکرد را از متنِ گزارش درمی‌آورد (فرمتِ عاطفه).
+
+    خروجی: {"work_date","check_in","check_out","worked_min"} یا None اگر بازه‌ی «HH:MM - HH:MM» نبود.
+    """
+    import re
+    t = (text or "").translate(_FA_NUM)
+    m = re.search(r"(\d{1,2}):(\d{2})\s*(?:-|–|—|~|تا|ta)\s*(\d{1,2}):(\d{2})", t)
+    if not m:
+        return None
+    h1, m1, h2, m2 = int(m.group(1)), int(m.group(2)), int(m.group(3)), int(m.group(4))
+    if not (0 <= h1 < 24 and 0 <= h2 < 24 and m1 < 60 and m2 < 60):
+        return None
+    worked = (h2 * 60 + m2) - (h1 * 60 + m1)
+    if worked < 0:
+        worked += 24 * 60  # شیفتِ گذر از نیمه‌شب (نادر)
+    work_date = clock.tehran_now().strftime("%Y-%m-%d")  # پیش‌فرض: روزِ ثبت (اگر تاریخ در متن نبود)
+    dm = re.search(r"(1[34]\d{2})[/\-.](\d{1,2})[/\-.](\d{1,2})", t)
+    if dm:
+        try:
+            work_date = jdatetime.date(int(dm.group(1)), int(dm.group(2)),
+                                       int(dm.group(3))).togregorian().strftime("%Y-%m-%d")
+        except Exception:  # noqa: BLE001 — تاریخِ نامعتبر → همان روزِ ثبت
+            pass
+    return {"work_date": work_date, "check_in": f"{h1:02d}:{m1:02d}",
+            "check_out": f"{h2:02d}:{m2:02d}", "worked_min": worked}
+
+
+def _format_help_text() -> str:
+    return (
+        "⚠️ فرمتِ گزارشت کامل نیست. لطفاً <b>دقیقاً</b> این‌طور بفرست — اول تاریخ، بعد ساعتِ ورود–خروج، بعد کارها:\n\n"
+        "<code>شنبه ۱۴۰۵/۰۴/۲۰\n"
+        "۱۰:۰۵ - ۱۸:۳۰\n"
+        "- کارِ اول\n"
+        "- کارِ دوم</code>\n\n"
+        "ثبتِ ساعتِ ورود و خروج برای محاسبه‌ی ساعاتِ کارکرد و حقوق لازم است. 🙏"
+    )
 
 
 def _leave_kind(text):
@@ -613,8 +659,15 @@ async def _process_report(msg, user, text) -> None:
             await msg.reply_text("📴 روزِ تعطیل برایت ثبت شد. (امروز ارزیابی و تسکی نداری.)")
         await maybe_send_perf_when_complete(msg.get_bot())
         return
-    rid = _add_report(user.id, user.full_name, text)
-    await msg.reply_text("📝 گزارشت ثبت شد. ممنون! 🙏")
+    att = _parse_attendance(text)
+    if not att:  # فرمتِ اشتباه (بدونِ ساعتِ ورود–خروج) → از نو با فرمتِ درست بفرستد
+        await msg.reply_text(_format_help_text(), parse_mode=ParseMode.HTML)
+        return
+    rid = _add_report(user.id, user.full_name, text, attendance=att)
+    h, mnt = att["worked_min"] // 60, att["worked_min"] % 60
+    await msg.reply_text(
+        f"📝 گزارشت ثبت شد ✅\n🕒 ورود {_fa(att['check_in'])} · خروج {_fa(att['check_out'])}"
+        f" · کارکرد {_fa(f'{h}:{mnt:02d}')}. ممنون! 🙏")
     if wt_brain.enabled():
         asyncio.create_task(_ai_followup(msg, user, rid, text))
     else:
@@ -1079,8 +1132,8 @@ async def maybe_report_reminder(app):
     """پایانِ شیفت (یک‌بار در روز): به پرسنلی که امروز گزارش نداده‌اند در گروه یادآوری کن (با دکمه)."""
     import poller  # واردسازیِ تنبل (پرهیز از حلقه)
     now = clock.tehran_now()
-    end = poller._shift_end_hour(now)
-    if end is None or now.hour < end:  # تعطیل یا پیش از پایانِ شیفت
+    end = poller._shift_end_min(now)
+    if end is None or (now.hour * 60 + now.minute) < end:  # تعطیل یا پیش از پایانِ شیفت
         return
     today = now.strftime("%Y-%m-%d")
     if _is_holiday(today):  # تعطیلِ عمومیِ اعلام‌شده → یادآوری نکن
@@ -1191,24 +1244,39 @@ def monthly_trend_text(month) -> str:
     return "\n".join(lines)
 
 
+_PERF_GRACE_MIN = 180  # مهلت پس از پایانِ شیفت؛ اگر تا این‌جا همه گزارش ندادند، کارت با علامتِ نداده‌ها می‌رود
+
+
 async def maybe_manager_report(app):
-    """پایانِ شیفت (یک‌بار در روز): گزارشِ عملکردِ روزانه دایرکت به مدیران."""
+    """گزارشِ عملکردِ روزانه به مدیران — فقط وقتی «همه گزارش دادند» (تا آن‌موقع صبر می‌کند).
+
+    فالبک: اگر تا ۳ ساعت پس از پایانِ شیفت هنوز همه گزارش نداده بودند، کارت (با علامتِ ❌ نداده‌ها)
+    فرستاده می‌شود تا مدیر بی‌خبر نماند. مسیرِ رویدادیِ maybe_send_perf_when_complete هم به‌محضِ
+    گزارشِ آخرین نفر کارتِ کامل را می‌فرستد.
+    """
     import poller
     import telegram_io
     now = clock.tehran_now()
-    end = poller._shift_end_hour(now)
-    if end is None or now.hour < end:
+    end = poller._shift_end_min(now)
+    if end is None:  # جمعه
+        return
+    nowmin = now.hour * 60 + now.minute
+    if nowmin < end:  # هنوز شیفت تمام نشده
         return
     today = now.strftime("%Y-%m-%d")
-    if db.get_meta("last_perf_report") == today:
+    if db.get_meta("last_perf_report") == today or _is_holiday(today):
         return
     workers, _r, _o = _workers_and_reports(today)
     if not workers:
         return
+    missing = workers_without_report(today)
+    if missing and nowmin < end + _PERF_GRACE_MIN:  # تا همه گزارش ندهند (یا مهلت نگذرد) نفرست
+        return
     db.set_meta("last_perf_report", today)
     try:
         await telegram_io.send_to_managers(app, daily_perf_text(today), parse_mode="HTML")
-        print("[worktasks] گزارشِ عملکردِ روزانه به مدیران ارسال شد.")
+        tag = "کامل (همه گزارش دادند)" if not missing else f"با {len(missing)} نفرِ گزارش‌نداده (مهلت گذشت)"
+        print(f"[worktasks] گزارشِ عملکردِ روزانه به مدیران ارسال شد — {tag}.")
     except Exception as e:
         print(f"[worktasks] گزارشِ مدیر ناموفق: {e!r}")
 
@@ -1269,6 +1337,53 @@ async def cmd_perfmonth(update, context):
         return
     month = clock.tehran_now().strftime("%Y-%m")
     await msg.reply_text(monthly_trend_text(month), parse_mode=ParseMode.HTML)
+
+
+def _worked_hours_text(jlabel, g_from, g_to) -> str:
+    """جمعِ ساعاتِ کارکردِ ماه به تفکیکِ پرسنل (بر اساسِ work_date و worked_minِ ثبت‌شده در گزارش‌ها)."""
+    with db._lock:
+        rows = db._conn.execute(
+            "SELECT user_name, COUNT(DISTINCT work_date), COALESCE(SUM(worked_min),0) "
+            "FROM wt_reports WHERE worked_min IS NOT NULL AND work_date>=? AND work_date<=? "
+            "GROUP BY user_id ORDER BY 3 DESC", (g_from, g_to)).fetchall()
+    lines = [f"🕒 <b>ساعاتِ کارکرد — {jlabel}</b>", ""]
+    if not rows:
+        lines.append("برای این ماه هنوز گزارشِ ساعت‌داری ثبت نشده.")
+        return "\n".join(lines)
+    total = 0
+    for name, days, mins in rows:
+        mins = int(mins or 0)
+        total += mins
+        lines.append(f"• <b>{html.escape(name or '—')}</b> — "
+                     f"{_fa(f'{mins // 60}:{mins % 60:02d}')} ساعت · {_fa(days)} روز")
+    lines += ["", f"➕ جمعِ کل: <b>{_fa(f'{total // 60}:{total % 60:02d}')}</b> ساعت"]
+    return "\n".join(lines)
+
+
+async def cmd_hours(update, context):
+    """جمعِ ساعاتِ کارکردِ ماهِ شمسی به تفکیکِ پرسنل (فقط مدیر). مثال: /hours یا /hours ۱۴۰۵/۰۴"""
+    import re
+    import datetime
+    msg = update.effective_message
+    user = update.effective_user
+    if not msg or not user or not _is_admin(user.id):
+        return
+    arg = ((context.args or [""])[0] or "").translate(_FA_NUM).strip()
+    jnow = jdatetime.date.fromgregorian(date=clock.tehran_now().date())
+    jy, jmo = jnow.year, jnow.month
+    m = re.search(r"(1[34]\d{2})[/\-.](\d{1,2})", arg)
+    if m:
+        jy, jmo = int(m.group(1)), int(m.group(2))
+    try:
+        start = jdatetime.date(jy, jmo, 1).togregorian()
+        nxt = (jdatetime.date(jy + 1, 1, 1) if jmo == 12 else jdatetime.date(jy, jmo + 1, 1)).togregorian()
+    except Exception:  # noqa: BLE001
+        await msg.reply_text("ماهِ نامعتبر. مثال: /hours ۱۴۰۵/۰۴")
+        return
+    g_from = start.strftime("%Y-%m-%d")
+    g_to = (nxt - datetime.timedelta(days=1)).strftime("%Y-%m-%d")
+    await msg.reply_text(_worked_hours_text(f"{_fa(jy)}/{_fa(f'{jmo:02d}')}", g_from, g_to),
+                         parse_mode=ParseMode.HTML)
 
 
 async def cmd_directives(update, context):

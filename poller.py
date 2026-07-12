@@ -23,24 +23,32 @@ import woo
 _BIZ_START, _BIZ_END = 10, 19
 _RT_WINDOW = datetime.timedelta(hours=12)  # فقط ناموفق/لغوِ تازه (نه بک‌لاگِ قدیمی هنگام ری‌استارت)
 _DUE_WINDOW = datetime.timedelta(days=14)  # یادآوری فقط برای پیگیری‌های اخیر، نه انبارِ قدیمی
-_THU_END = 14  # پنجشنبه شیفت تا ۱۴؛ جمعه تعطیل؛ شنبه–چهارشنبه تا _BIZ_END
+# پایانِ دقیقِ شیفت (دقیقه از نیمه‌شب): شنبه–چهارشنبه ۱۸:۳۰، پنجشنبه ۱۴:۳۰، جمعه تعطیل
+_BIZ_START_MIN = 10 * 60
+_BIZ_END_MIN = 18 * 60 + 30
+_THU_END_MIN = 14 * 60 + 30
 
 
-def _shift_end_hour(now):
-    """ساعتِ پایانِ شیفتِ امروز (تهران)؛ None یعنی امروز تعطیل است (جمعه)."""
+def _min_of_day(now) -> int:
+    """دقیقه از نیمه‌شبِ تهران."""
+    return now.hour * 60 + now.minute
+
+
+def _shift_end_min(now):
+    """پایانِ شیفتِ امروز به‌دقیقه از نیمه‌شب (تهران)؛ None یعنی امروز تعطیل است (جمعه)."""
     wd = (now.weekday() + 2) % 7  # شنبه=۰، یکشنبه=۱، … پنجشنبه=۵، جمعه=۶
     if wd == 6:            # جمعه
         return None
-    if wd == 5:            # پنجشنبه
-        return _THU_END
-    return _BIZ_END        # شنبه تا چهارشنبه
+    if wd == 5:            # پنجشنبه ۱۴:۳۰
+        return _THU_END_MIN
+    return _BIZ_END_MIN    # شنبه تا چهارشنبه ۱۸:۳۰
 
 
 def _in_shift(now=None) -> bool:
-    """داخلِ شیفتِ کاری؟ شنبه–چهارشنبه ۱۰–۱۹، پنجشنبه ۱۰–۱۴، جمعه تعطیل."""
+    """داخلِ شیفتِ کاری؟ شنبه–چهارشنبه ۱۰–۱۸:۳۰، پنجشنبه ۱۰–۱۴:۳۰، جمعه تعطیل."""
     now = now or clock.tehran_now()
-    end = _shift_end_hour(now)
-    return end is not None and _BIZ_START <= now.hour < end
+    end = _shift_end_min(now)
+    return end is not None and _BIZ_START_MIN <= _min_of_day(now) < end
 
 
 def _recent(date_created):
@@ -108,10 +116,10 @@ async def _maybe_leads(app):
 
 
 async def _maybe_shift_summary(app):
-    """راس ساعت ۱۹ تهران (پایانِ شیفت): جمع‌بندیِ فعالیتِ اپراتورها به گروهِ پیگیری."""
+    """پایانِ شیفت (۱۸:۳۰ عادی / ۱۴:۳۰ پنجشنبه): جمع‌بندیِ فعالیتِ اپراتورها به گروهِ پیگیری."""
     now = clock.tehran_now()
-    end = _shift_end_hour(now)
-    if end is None or now.hour < end:  # روزِ تعطیل یا هنوز پیش از پایانِ شیفت
+    end = _shift_end_min(now)
+    if end is None or _min_of_day(now) < end:  # روزِ تعطیل یا هنوز پیش از پایانِ شیفت
         return
     today = now.strftime("%Y-%m-%d")
     if db.get_meta("last_shift") == today:

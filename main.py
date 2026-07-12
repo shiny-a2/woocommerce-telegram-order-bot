@@ -88,6 +88,7 @@ _COMMANDS = [
     BotCommand("range", "گزارش فروش در بازه‌ی شمسی"),
     BotCommand("perf", "کارت عملکرد تیم امروز (مدیر)"),
     BotCommand("perfmonth", "روند ماهانه‌ی عملکرد (مدیر)"),
+    BotCommand("hours", "جمع ساعات کارکرد ماه برای حقوق (مدیر)"),
     BotCommand("crawl", "خزش مشکلات و ساخت تسک (مدیر)"),
     BotCommand("role", "شرح وظایف پرسنل (مدیر)"),
     BotCommand("setup", "چک‌لیست راه‌اندازی و آنبوردینگ (مدیر)"),
