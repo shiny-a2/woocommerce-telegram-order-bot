@@ -244,19 +244,24 @@ async def interpret_manager_reply(original_bot_text: str, manager_reply: str, co
 async def route_issues(issues: list, staff: list) -> list:
     """هر مشکلِ خزش را به مناسب‌ترین پرسنل (بر اساسِ شرحِ وظایفش) نگاشت می‌کند و متنِ تسکِ تمیز می‌سازد.
 
-    staff = [{"name","role"}]. خروجی: [{"task_text","assignee"}] — assignee خالی = نامشخص (به مدیر بماند).
+    issues = [{"key","text"}] (یا رشته‌ی ساده). staff = [{"name","role"}].
+    خروجی: [{"key","task_text","assignee"}] — key عیناً از ورودی تکرار می‌شود (برای dedupِ قطعی)؛
+    assignee خالی = نامشخص (تسکِ بی‌مسئول برای اساینِ دستیِ مدیر).
     """
     if not enabled() or not issues:
         return []
+    norm = [(i if isinstance(i, dict) else {"key": "", "text": str(i)}) for i in issues]
+    valid_keys = {str(i.get("key") or "") for i in norm}
     roster = "\n".join(f"- {s['name']}: {s['role']}" for s in staff) or "— (هیچ پرسنلی شرحِ وظایف ندارد)"
     system = (
-        "تو دستیارِ «مدیرِ داخلی» هستی. فهرستی از «مشکلات/کارهای پیداشده» و فهرستِ پرسنل با «شرحِ وظایف»‌شان داری. "
-        "هر مشکل را فقط اگر واقعاً در حوزه‌ی شرحِ وظایفِ یک نفر باشد به او بسپار؛ اگر هیچ‌کس مسئولش نیست، assignee را خالی بگذار "
-        "(حدس نزن). برای هر مشکل یک متنِ تسکِ کوتاه، عملی و فعل‌محورِ فارسی بساز. "
-        "فقط و فقط یک JSON برگردان: {\"assignments\":[{\"task_text\":\"...\",\"assignee\":\"نامِ دقیقِ پرسنل از فهرست یا رشته‌ی خالی\"}]}."
+        "تو دستیارِ «مدیرِ داخلی» هستی. فهرستی از «مشکلاتِ پیداشده» (هرکدام با یک key) و فهرستِ پرسنل با «شرحِ وظایف»‌شان داری. "
+        "برای هر مشکل: key را عیناً تکرار کن، یک متنِ تسکِ کوتاه/عملی/فعل‌محورِ فارسی بساز، و فقط اگر واقعاً در حوزه‌ی "
+        "شرحِ وظایفِ یک نفر است او را assignee بگذار؛ وگرنه assignee را خالی بگذار (حدس نزن). "
+        "فقط و فقط یک JSON برگردان: "
+        "{\"assignments\":[{\"key\":\"همان key ورودی\",\"task_text\":\"...\",\"assignee\":\"نامِ دقیق یا رشته‌ی خالی\"}]}."
     )
-    user = ("پرسنل و شرحِ وظایف:\n" + roster + "\n\nمشکلاتِ پیداشده:\n"
-            + "\n".join(f"- {i}" for i in issues))
+    user = ("پرسنل و شرحِ وظایف:\n" + roster + "\n\nمشکلاتِ پیداشده (key | متن):\n"
+            + "\n".join(f"- {i.get('key')} | {i.get('text')}" for i in norm))
     try:
         raw = (await _chat(system, user, 800)).strip()
         if raw.startswith("```"):
@@ -269,8 +274,11 @@ async def route_issues(issues: list, staff: list) -> list:
             if not isinstance(a, dict):
                 continue
             txt = str(a.get("task_text", "")).strip()
+            key = str(a.get("key", "")).strip()
+            if key not in valid_keys:  # هذیانِ AI روی key → خالی (فالبک سمتِ فراخوان تطبیق می‌دهد)
+                key = ""
             if txt:
-                out.append({"task_text": txt, "assignee": str(a.get("assignee", "")).strip()})
+                out.append({"key": key, "task_text": txt, "assignee": str(a.get("assignee", "")).strip()})
         return out
     except Exception as e:  # noqa: BLE001
         print(f"[wt_brain] route_issues خطا: {e!r}")

@@ -122,6 +122,16 @@ def wt_init():
             db._conn.execute("ALTER TABLE wt_tasks ADD COLUMN source_key TEXT")
         except sqlite3.OperationalError:
             pass
+        try:  # متریکِ مشکل (شمارش) برای تشخیصِ بدترشدن و رفرشِ تسک
+            db._conn.execute("ALTER TABLE wt_tasks ADD COLUMN metric REAL")
+        except sqlite3.OperationalError:
+            pass
+        try:  # حداکثر یک تسکِ بازِ خزش به‌ازای هر کلید (ضدِ ریسِ /crawl و خزشِ خودکار)
+            db._conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_wt_open_key ON wt_tasks(source_key) "
+                "WHERE status='open' AND source_key IS NOT NULL AND source_key<>''")
+        except sqlite3.OperationalError:
+            pass
         db._conn.commit()
     print("[worktasks] جدول‌های گزارشِ کار آماده شد.")
 
@@ -191,26 +201,55 @@ def _staff_roles():
 
 
 # ---------- تسک‌ها ----------
-def _add_task(assignee_id, assignee_name, assigner_id, assigner_name, text, source_key=None) -> int:
+def _add_task(assignee_id, assignee_name, assigner_id, assigner_name, text, source_key=None, metric=None) -> int:
     with db._lock:
-        cur = db._conn.execute(
-            """INSERT INTO wt_tasks(assignee_id, assignee_name, assigner_id, assigner_name, text, status,
-                                    created_ts, source_key)
-               VALUES (?,?,?,?,?, 'open', ?, ?)""",
-            (assignee_id, assignee_name, assigner_id, assigner_name, text, time.time(), source_key),
-        )
-        db._conn.commit()
-        return cur.lastrowid
+        try:
+            cur = db._conn.execute(
+                """INSERT INTO wt_tasks(assignee_id, assignee_name, assigner_id, assigner_name, text, status,
+                                        created_ts, source_key, metric)
+                   VALUES (?,?,?,?,?, 'open', ?, ?, ?)""",
+                (assignee_id, assignee_name, assigner_id, assigner_name, text, time.time(), source_key, metric),
+            )
+            db._conn.commit()
+            return cur.lastrowid
+        except sqlite3.IntegrityError:  # کلیدِ بازِ تکراری (ریسِ /crawl و خزشِ خودکار) → نادیده
+            db._conn.rollback()
+            return -1
 
 
-def _open_crawl_keys() -> set:
-    """کلیدهای دسته‌ای که همین حالا تسکِ بازِ خزش دارند (برای جلوگیری از تکرارِ همان مشکل)."""
+def _open_crawl_by_key() -> dict:
+    """{key: {id, text, metric, created_ts, assignee_name}} برای همه‌ی تسک‌های بازِ خزش (dedup/رفرش/تشدید)."""
     with db._lock:
         rows = db._conn.execute(
-            "SELECT DISTINCT source_key FROM wt_tasks "
+            "SELECT source_key, id, text, metric, created_ts, assignee_name FROM wt_tasks "
             "WHERE status='open' AND source_key IS NOT NULL AND source_key<>''"
         ).fetchall()
-    return {r[0] for r in rows}
+    return {r[0]: {"id": r[1], "text": r[2], "metric": r[3], "created_ts": r[4], "assignee_name": r[5]}
+            for r in rows}
+
+
+def _update_crawl_task(task_id, text, metric):
+    """متن و متریکِ یک تسکِ بازِ خزش را به‌روز می‌کند (برای دسته‌های پویا یا بدترشده)."""
+    with db._lock:
+        db._conn.execute("UPDATE wt_tasks SET text=?, metric=? WHERE id=? AND status='open'",
+                         (text, metric, int(task_id)))
+        db._conn.commit()
+
+
+def _bump_crawl_task(task_id):
+    """ساعتِ عمرِ تسک را صفر می‌کند تا تشدیدِ بعدی یک TTL دیگر فاصله بگیرد."""
+    with db._lock:
+        db._conn.execute("UPDATE wt_tasks SET created_ts=? WHERE id=?", (time.time(), int(task_id)))
+        db._conn.commit()
+
+
+def _recent_done_crawl_key(key, within_s) -> bool:
+    """آیا همین کلید به‌تازگی (within_s ثانیه) done شده بود؟ (برای «دوباره ظاهر شد، حل نشده»)."""
+    with db._lock:
+        r = db._conn.execute(
+            "SELECT 1 FROM wt_tasks WHERE source_key=? AND status='done' AND done_ts>=? LIMIT 1",
+            (key, time.time() - within_s)).fetchone()
+    return r is not None
 
 
 def _words(s):
@@ -1275,53 +1314,109 @@ async def cmd_role(update, context):
         parse_mode=ParseMode.HTML)
 
 
+_CRAWL_TTL_DAYS = 3          # تسکِ بازِ خزشِ کهنه‌تر از این → تشدید به مدیر
+_WORSEN_FACTOR = 1.5         # اگر متریک ≥۱.۵ برابر و…
+_WORSEN_MIN_DELTA = 3        # …حداقل ۳ واحد بدتر شد → تسک رفرش/هشدار
+_RECUR_DAYS = 2             # مشکل ظرفِ این مدت پس از done دوباره پیدا شد → «حل نشده»
+
+
 async def _run_crawl(actor_id, actor_name):
-    """خزش + اساینِ خودکارِ تسک‌ها طبقِ شرحِ وظایف. خروجی: (متنِ گزارشِ HTML، تعدادِ اساین‌شده). مشترکِ /crawl و خزشِ خودکار."""
+    """خزش + مدیریتِ هوشمندِ تسک‌ها: dedupِ قطعی (کلید)، رفرشِ دسته‌های پویا/بدترشده، تشدیدِ کهنه‌ها،
+    و نشانه‌گذاریِ «دوباره ظاهر شد». خروجی: (متنِ HTML، تعدادِ تسکِ تازه، فعالیتِ قابلِ‌اعلام)."""
     import crawler
-    issues, notes = await crawler.collect()  # هر issue = {"key","text"}
-    lines = ["🔎 <b>خزشِ مشکلات</b>", ""]
-    n_assigned = 0
-    open_keys = _open_crawl_keys()
-    fresh = [i for i in issues if (i.get("key") or "") not in open_keys]
-    already = [i for i in issues if (i.get("key") or "") in open_keys]
-    if not issues:
-        lines.append("مشکلِ عملی‌ای پیدا نشد ✅")
-    elif not fresh:
-        lines.append(f"مشکلِ تازه‌ای نبود؛ {_fa(len(already))} مورد از قبل تسکِ باز دارند (تکرار نشد) ✅")
-    else:
-        staff = _staff_roles()
-        routes = (await wt_brain.route_issues([i["text"] for i in fresh],
-                                              [{"name": n, "role": d} for _u, n, d in staff])
-                  if staff else [])
-        name2uid = {n: u for u, n, d in staff}
-        assigned, pending = [], []
-        if routes:
-            for a in routes:
-                nm = a.get("assignee")
-                key = _match_key(a.get("task_text", ""), fresh)
-                if nm and nm in name2uid:
-                    _add_task(name2uid[nm], nm, actor_id, actor_name, a["task_text"], source_key=key)
-                    assigned.append(f"• {html.escape(a['task_text'])} → <b>{html.escape(nm)}</b>")
-                else:
-                    pending.append(f"• {html.escape(a['task_text'])}")
+    issues, notes = await crawler.collect()  # هر issue = {key, text, metric, dynamic}
+    open_by_key = _open_crawl_by_key()
+    now = time.time()
+    ttl = _CRAWL_TTL_DAYS * 86400
+
+    fresh, refreshed, escalated, skipped = [], [], [], 0
+    for i in issues:
+        key = i.get("key") or ""
+        ex = open_by_key.get(key) if key else None
+        if not ex:
+            fresh.append(i)
+            continue
+        m_new, m_old = i.get("metric"), ex.get("metric")
+        worsened = bool(m_new and m_old and m_new >= m_old * _WORSEN_FACTOR and (m_new - m_old) >= _WORSEN_MIN_DELTA)
+        age = now - (ex.get("created_ts") or now)
+        if i.get("dynamic") or worsened:
+            _update_crawl_task(ex["id"], i["text"], m_new)
+            refreshed.append((i, worsened))
+        elif age > ttl:
+            _bump_crawl_task(ex["id"])
+            escalated.append((i, ex, age))
         else:
-            pending = [f"• {html.escape(i['text'])}" for i in fresh]
-        n_assigned = len(assigned)
-        if assigned:
-            lines.append(f"✅ <b>{_fa(len(assigned))} تسک خودکار سپرده شد</b> (طبقِ شرحِ وظایف):")
-            lines += assigned
-        if pending:
-            if assigned:
-                lines.append("")
-            lines.append("🕗 <b>نیازِ اساینِ دستی</b> (مسئولش مشخص نبود):")
-            lines += pending
-            lines.append("<i>برای سپردن، روی همین پیام ریپلای بزن و بگو «به {نام} بده».</i>")
-        if already:
-            lines.append("")
-            lines.append(f"🔁 <i>{_fa(len(already))} مشکل از قبل تسکِ باز دارد؛ دوباره ساخته نشد.</i>")
+            skipped += 1
+
+    assigned_lines, pending_lines, n_new = [], [], 0
+    if fresh:
+        staff = _staff_roles()
+        routes = (await wt_brain.route_issues([{"key": i["key"], "text": i["text"]} for i in fresh],
+                                              [{"name": n, "role": d} for _u, n, d in staff]) if staff else [])
+        name2uid = {n: u for u, n, d in staff}
+        by_key = {i["key"]: i for i in fresh}
+        done_keys = set()
+
+        def _make(key, txt, assignee):
+            nonlocal n_new
+            issue = by_key.get(key)
+            if not issue or key in done_keys:
+                return
+            done_keys.add(key)
+            if _recent_done_crawl_key(key, _RECUR_DAYS * 86400):
+                txt = "⚠️ دوباره ظاهر شد (قبلاً حل‌شده علامت خورده بود) — " + txt
+            if assignee and assignee in name2uid:
+                tid = _add_task(name2uid[assignee], assignee, actor_id, actor_name, txt,
+                                source_key=key, metric=issue.get("metric"))
+                if tid != -1:
+                    n_new += 1
+                    assigned_lines.append(f"• {html.escape(txt)} → <b>{html.escape(assignee)}</b>")
+            else:
+                tid = _add_task(0, "—", actor_id, actor_name, txt, source_key=key, metric=issue.get("metric"))
+                if tid != -1:
+                    n_new += 1
+                    pending_lines.append(f"• {html.escape(txt)}")
+
+        for a in routes:
+            k = a.get("key") or _match_key(a.get("task_text", ""), fresh)
+            _make(k, a.get("task_text") or (by_key.get(k, {}).get("text") or ""), a.get("assignee"))
+        for i in fresh:  # هر مشکلی که AI برنگرداند → تسکِ بی‌مسئول (تا dedup پوششش دهد)
+            _make(i["key"], i["text"], "")
+
+    body = []
+    if assigned_lines:
+        body.append(f"✅ <b>{_fa(len(assigned_lines))} تسکِ تازه سپرده شد</b> (طبقِ شرحِ وظایف):")
+        body += assigned_lines
+    if pending_lines:
+        if assigned_lines:
+            body.append("")
+        body.append("🕗 <b>نیازِ اساینِ دستی</b> (مسئولش مشخص نبود):")
+        body += pending_lines
+        body.append("<i>برای سپردن، روی همین پیام ریپلای بزن و بگو «به {نام} بده».</i>")
+    if refreshed:
+        body.append("")
+        body.append("🔄 <b>به‌روزرسانی</b> (وضعیتِ مشکل تغییر کرد):")
+        for i, w in refreshed:
+            body.append(f"• {html.escape(i['text'])}" + (" ⤴️ بدتر شد" if w else ""))
+    if escalated:
+        body.append("")
+        body.append("⏳ <b>تشدید</b> (روزهاست باز مانده و انجام نشده):")
+        for i, ex, age in escalated:
+            body.append(f"• {html.escape(i['text'])} — مسئول: {html.escape(str(ex.get('assignee_name') or '—'))}"
+                        f" ({_fa(int(age // 86400))} روز)")
+    if skipped:
+        body.append("")
+        body.append(f"🔁 <i>{_fa(skipped)} مشکل از قبل تسکِ باز دارد؛ دوباره ساخته نشد.</i>")
+
+    if not issues:
+        body = ["مشکلِ عملی‌ای پیدا نشد ✅"]
+    elif not body:
+        body = ["مشکلِ تازه‌ای نبود؛ همه از قبل تسکِ باز دارند ✅"]
+
+    lines = ["🔎 <b>خزشِ مشکلات</b>", ""] + body
     if notes:
         lines += ["", "⚠️ " + "؛ ".join(html.escape(n) for n in notes)]
-    return "\n".join(lines), n_assigned
+    return "\n".join(lines), n_new, n_new + len(refreshed) + len(escalated)
 
 
 async def cmd_crawl(update, context):
@@ -1332,7 +1427,7 @@ async def cmd_crawl(update, context):
         return
     await msg.reply_text("🔎 در حال خزشِ ملایم… (چند لحظه)")
     try:
-        text, _n = await _run_crawl(user.id, user.full_name)
+        text, _n, _a = await _run_crawl(user.id, user.full_name)
     except Exception as e:  # noqa: BLE001
         await msg.reply_text(f"خزش ناموفق: {type(e).__name__}")
         return
@@ -1354,7 +1449,10 @@ async def maybe_auto_crawl(app):
         return
     db.set_meta("last_auto_crawl", today)
     try:
-        text, n = await _run_crawl(0, "🤖 خزشِ خودکار")
+        text, n_new, n_activity = await _run_crawl(0, "🤖 خزشِ خودکار")
+        if n_activity == 0:  # چیزِ تازه/بدترشده/تشدیدی نبود → گروه را با پیامِ خالی شلوغ نکن
+            print("[worktasks] خزشِ اولِ شیفت: فعالیتِ تازه‌ای نبود؛ به گروه ارسال نشد.")
+            return
         body = "🕘 <b>خزشِ اولِ شیفت — تسک‌های امروز</b>\n\n" + text
         wg = _workgroup()
         sent_group = False
@@ -1366,7 +1464,7 @@ async def maybe_auto_crawl(app):
                 print(f"[worktasks] درجِ خزش در گروهِ کار ناموفق: {e!r}")
         if not sent_group:  # فالبک: گروهِ کار ثبت نشده یا ارسال نشد → به مدیران
             await _send_managers(app.bot, body)
-        print(f"[worktasks] خزشِ اولِ شیفت: {_fa(n)} تسک سپرده شد "
+        print(f"[worktasks] خزشِ اولِ شیفت: {_fa(n_new)} تسکِ تازه "
               f"({'گروهِ کار' if sent_group else 'مدیران'}).")
     except Exception as e:  # noqa: BLE001
         print(f"[worktasks] خزشِ خودکار ناموفق: {e!r}")
