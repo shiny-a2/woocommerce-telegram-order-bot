@@ -109,6 +109,19 @@ def init():
             avg_engagement  REAL
         )"""
     )
+    for col in ("reach INTEGER", "profile_visits INTEGER"):  # متریک‌های بیشتر برای روندِ هفتگی
+        try:
+            _conn.execute(f"ALTER TABLE ig_snapshots ADD COLUMN {col}")
+        except sqlite3.OperationalError:
+            pass
+    _conn.execute(
+        """CREATE TABLE IF NOT EXISTS ig_plans (
+            ts     REAL,
+            day    TEXT,
+            models TEXT,
+            brands TEXT
+        )"""
+    )
     _conn.commit()
 
 
@@ -215,14 +228,47 @@ def newcard_phones(chat_id):
 
 
 # ---------- اسنپ‌شاتِ آمارِ اینستاگرام (برای آنالیزِ رشد روی دادهٔ ذخیره‌شده) ----------
-def ig_snapshot_add(followers, media_count, avg_eng, avg_eng_rate):
+def ig_snapshot_add(followers, media_count, avg_eng, avg_eng_rate, reach=None, profile_visits=None):
     with _lock:
         _conn.execute(
-            "INSERT INTO ig_snapshots(ts, followers, media_count, avg_engagement, avg_engagement_rate) "
-            "VALUES (?,?,?,?,?)",
-            (time.time(), int(followers or 0), int(media_count or 0), avg_eng, avg_eng_rate),
+            "INSERT INTO ig_snapshots(ts, followers, media_count, avg_engagement, avg_engagement_rate, "
+            "reach, profile_visits) VALUES (?,?,?,?,?,?,?)",
+            (time.time(), int(followers or 0), int(media_count or 0), avg_eng, avg_eng_rate,
+             (int(reach) if reach not in (None, "") else None),
+             (int(profile_visits) if profile_visits not in (None, "") else None)),
         )
         _conn.commit()
+
+
+def ig_snapshot_ago(seconds):
+    """نزدیک‌ترین اسنپ‌شاتِ کامل به «seconds ثانیه پیش» (یا None) — برای مقایسهٔ هفتگی."""
+    with _lock:
+        r = _conn.execute(
+            "SELECT ts, followers, media_count, avg_engagement, reach, profile_visits FROM ig_snapshots "
+            "WHERE ts<=? ORDER BY ts DESC LIMIT 1", (time.time() - seconds,)).fetchone()
+    return ({"ts": r[0], "followers": r[1], "media_count": r[2], "avg_engagement": r[3],
+             "reach": r[4], "profile_visits": r[5]} if r else None)
+
+
+def plan_add(models, brands):
+    with _lock:
+        _conn.execute("INSERT INTO ig_plans(ts, day, models, brands) VALUES (?,?,?,?)",
+                      (time.time(), time.strftime("%Y-%m-%d"), str(models or ""), str(brands or "")))
+        _conn.commit()
+
+
+def last_plan_models(within_days=14):
+    """مدل‌های پوشش‌داده‌شده در پلن‌های اخیر (برای تکرارنشدن + پوششِ بقیهٔ رفرنس‌ها)."""
+    with _lock:
+        rows = _conn.execute("SELECT models FROM ig_plans WHERE ts>=? ORDER BY ts DESC",
+                             (time.time() - within_days * 86400,)).fetchall()
+    seen = []
+    for (m,) in rows:
+        for x in (m or "").split("|"):
+            x = x.strip()
+            if x and x not in seen:
+                seen.append(x)
+    return seen
 
 
 def ig_last_snapshot_ts():

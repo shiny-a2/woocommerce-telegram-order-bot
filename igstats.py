@@ -248,7 +248,8 @@ def _derive(bundle: dict) -> dict:
     media_count = ov.get("media_count") or 0
 
     if followers and _t_now() - (db.ig_last_snapshot_ts() or 0) >= _SNAP_EVERY:
-        db.ig_snapshot_add(followers, media_count, md.get("avg_engagement"), md.get("avg_engagement_rate"))
+        db.ig_snapshot_add(followers, media_count, md.get("avg_engagement"), md.get("avg_engagement_rate"),
+                           reach=au.get("reach"), profile_visits=au.get("profile_visits"))
     f1, f7, f30 = db.ig_followers_ago(86400), db.ig_followers_ago(7 * 86400), db.ig_followers_ago(30 * 86400)
     growth_1d = (followers - f1) if (followers and f1 is not None) else None
     growth_7d = (followers - f7) if (followers and f7 is not None) else None
@@ -328,27 +329,33 @@ async def maybe_snapshot():
         pass
 
 
-async def instock_by_brand(sample=100) -> dict:
-    """محصولاتِ موجودِ سایت (stock=instock) گروه‌بندی بر اساسِ برندِ تشخیص‌داده‌شده از نامِ محصول.
+async def instock_by_brand(sample=400) -> dict:
+    """محصولاتِ موجودِ سایت (stock=instock ⟺ تعداد≥۱) گروه‌بندی بر اساسِ برندِ تشخیص‌داده‌شده از نامِ محصول.
 
-    خروجی: {brand: {"count": n, "examples": [نام/رفرنس]}} — برای پوششِ رفرنس‌های واقعیِ قابلِ عکاسی در تقویم.
+    چند صفحه را ملایم می‌خواند (پوششِ بهترِ رفرنس‌ها). خروجی: {brand: {count, examples:[نام/رفرنس]}}.
     """
     import woo
-    try:
-        items = await woo.get("products", {
-            "stock_status": "instock", "status": "publish", "per_page": min(int(sample), 100),
-            "orderby": "date", "order": "desc", "_fields": "id,name,sku"})
-    except Exception as e:  # noqa: BLE001
-        print(f"[igstats] instock fetch: {e!r}")
-        return {}
     by = defaultdict(lambda: {"count": 0, "examples": []})
-    for p in (items or []):
-        name = (p.get("name") or "").strip()
-        for b in _detect_brands(name):
-            by[b]["count"] += 1
-            if len(by[b]["examples"]) < 4:
-                sku = p.get("sku")
-                by[b]["examples"].append(name[:42] + (f" [{sku}]" if sku else ""))
+    per = 100
+    pages = max(1, min(6, (int(sample) + per - 1) // per))
+    for page in range(1, pages + 1):
+        try:
+            items = await woo.get("products", {
+                "stock_status": "instock", "status": "publish", "per_page": per, "page": page,
+                "orderby": "date", "order": "desc", "_fields": "id,name,sku"})
+        except Exception as e:  # noqa: BLE001
+            print(f"[igstats] instock fetch p{page}: {e!r}")
+            break
+        if not items:
+            break
+        for p in items:
+            name = (p.get("name") or "").strip()
+            for b in _detect_brands(name):
+                by[b]["count"] += 1
+                if len(by[b]["examples"]) < 5:
+                    sku = p.get("sku")
+                    by[b]["examples"].append(name[:42] + (f" [{sku}]" if sku else ""))
+        await asyncio.sleep(0.4)  # ملایم بینِ صفحه‌ها (ضدبلاک)
     return dict(sorted(by.items(), key=lambda kv: -kv[1]["count"]))
 
 
@@ -594,3 +601,48 @@ def rivals_brief(rep: dict) -> str:
         parts.append(f"@{r['handle']}: فالوور {r.get('followers')}، پستِ۷روز {r.get('posts_7d')}، "
                      f"تعامل {r.get('avg_eng')}{bt}، برندها[{bc}]")
     return "؛ ".join(parts)
+
+
+# ---------- گزارش/فیدبکِ هفتگی (مقایسهٔ هفته‌به‌هفته روی دادهٔ ذخیره‌شده) ----------
+async def weekly_review() -> dict:
+    """آنالیزِ هفتگی: مقایسهٔ متریک‌های امروز با ~۷ روزِ پیش + توصیه‌ها. برای فیدبک به مدیر/ادمین."""
+    now = await summary()
+    if not now.get("ok"):
+        return {"ok": False}
+    wk = db.ig_snapshot_ago(7 * 86400)
+
+    def _d(cur, key):
+        old = (wk or {}).get(key)
+        return (cur - old) if (cur is not None and old is not None) else None
+    return {
+        "ok": True, "username": now.get("username"), "have_baseline": wk is not None,
+        "followers": now.get("followers"), "d_followers": _d(now.get("followers"), "followers"),
+        "avg_engagement": now.get("avg_engagement"), "d_engagement": _d(now.get("avg_engagement"), "avg_engagement"),
+        "reach": now.get("reach"), "d_reach": _d(now.get("reach"), "reach"),
+        "profile_visits": now.get("profile_visits"), "d_profile": _d(now.get("profile_visits"), "profile_visits"),
+        "posts_7d": now.get("posts_7d"), "eng_trend_pct": now.get("eng_trend_pct"),
+        "best_type": now.get("best_type"), "brand_coverage": now.get("brand_coverage"),
+        "recommendations": now.get("recommendations"),
+    }
+
+
+def format_weekly(w: dict) -> str:
+    if not w.get("ok"):
+        return "📈 گزارشِ هفتگیِ اینستاگرام فعلاً آماده نیست."
+    L = [f"📈 <b>گزارشِ هفتگیِ اینستاگرام</b> @{w.get('username', '')}", ""]
+    L.append(f"👥 فالوور: <b>{_fa(w.get('followers', 0))}</b> · تغییرِ هفته <b>{_dd(w.get('d_followers'))}</b>")
+    L.append(f"❤️ میانگینِ تعامل: <b>{_fa(w.get('avg_engagement', 0))}</b> · تغییر <b>{_dd(w.get('d_engagement'))}</b>")
+    if w.get("reach") is not None:
+        L.append(f"👁 ریچِ اکانت: <b>{_fa(w.get('reach') or 0)}</b> · تغییر <b>{_dd(w.get('d_reach'))}</b>")
+    if w.get("profile_visits") is not None:
+        L.append(f"👤 بازدیدِ پروفایل: <b>{_fa(w.get('profile_visits') or 0)}</b> · تغییر <b>{_dd(w.get('d_profile'))}</b>")
+    L.append(f"📝 پستِ ۷روز: {_fa(w.get('posts_7d', 0))}")
+    bt = w.get("best_type")
+    if bt:
+        L.append(f"🏆 پربازده‌ترین نوع: {_TYPE.get(bt['type'], bt['type'])} (میانگین {_fa(bt['avg_eng'])})")
+    if not w.get("have_baseline"):
+        L += ["", "<i>هفتهٔ اول: مبنای مقایسه پس از یک هفته اسنپ‌شاتِ کامل نمایش داده می‌شود.</i>"]
+    recs = w.get("recommendations") or []
+    if recs:
+        L += ["", "💡 <b>اصلاح برای هفتهٔ بعد:</b>"] + [f"• {r['text']}" for r in recs[:4]]
+    return "\n".join(L)

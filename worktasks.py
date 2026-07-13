@@ -1734,12 +1734,17 @@ async def cmd_igplan(update, context):
     if not r.get("ok"):
         await wait.edit_text("آنالیزِ اینستاگرام در دسترس نیست؛ کمی بعد دوباره امتحان کن.")
         return
-    inventory = await igstats.instock_by_brand(100)  # مدل‌های موجودِ سایت برای پوششِ رفرنس‌ها
+    inventory = await igstats.instock_by_brand()  # ~۴۰۰ محصولِ موجودِ سایت (پوششِ بهترِ رفرنس‌ها)
     rivals_brief = igstats.rivals_brief_stored()  # از اسنپ‌شاتِ ذخیره‌شده (سریع، بدونِ فراخوانِ زنده)
-    plan = await wt_brain.ig_content_plan(r, inventory, rivals_brief)
+    covered = " | ".join(db.last_plan_models(14))  # مدل‌های پوشش‌داده‌شدهٔ ۲هفتهٔ اخیر (تکرارنشدن)
+    plan = await wt_brain.ig_content_plan(r, inventory, rivals_brief, covered)
     if not plan or not (plan.get("calendar") or plan.get("tasks")):
         await wait.edit_text("ساختِ برنامه فعلاً ممکن نشد (مغزِ AI پاسخ نداد). کمی بعد دوباره بزن.")
         return
+    # ذخیرهٔ مدل‌های این پلن (برای پوشش/عدمِ تکرار در پلن‌های بعد)
+    _models = [str(d.get("brand", "")).strip() for d in (plan.get("calendar") or []) if str(d.get("brand", "")).strip()]
+    if _models:
+        db.plan_add(" | ".join(_models), "")
     made = 0
     ig_uid = _ig_admin_uid()
     today = clock.tehran_now().strftime("%Y-%m-%d")
@@ -1757,6 +1762,46 @@ async def cmd_igplan(update, context):
         await msg.reply_text(chunks[0], parse_mode=ParseMode.HTML)
     for ch in chunks[1:]:
         await msg.reply_text(ch, parse_mode=ParseMode.HTML)
+
+
+async def cmd_igweekly(update, context):
+    """گزارش/فیدبکِ هفتگیِ اینستاگرام — مقایسهٔ هفته‌به‌هفته + اصلاح (مدیر یا ادمینِ اینستاگرام)."""
+    msg = update.effective_message
+    user = update.effective_user
+    if not msg or not user or not (_is_admin(user.id) or user.id == _ig_admin_uid()):
+        return
+    wait = await msg.reply_text("📈 در حال آماده‌سازیِ گزارشِ هفتگی…")
+    w = await igstats.weekly_review()
+    await wait.edit_text(igstats.format_weekly(w), parse_mode=ParseMode.HTML)
+
+
+async def maybe_ig_weekly(app):
+    """شنبه‌ها یک‌بار: جمع‌بندی/فیدبکِ هفتگیِ اینستاگرام به مدیران + ادمینِ پیج (برای اصلاحِ پلنِ بعد)."""
+    if not igstats.enabled():
+        return
+    import poller
+    now = clock.tehran_now()
+    if now.weekday() != 5 or not poller._in_shift(now):  # فقط شنبه، داخلِ شیفت
+        return
+    wk = now.strftime("%Y-%W")
+    if db.get_meta("last_ig_weekly") == wk:
+        return
+    db.set_meta("last_ig_weekly", wk)
+    try:
+        w = await igstats.weekly_review()
+        if not w.get("ok"):
+            return
+        txt = "🗓️ <b>جمع‌بندیِ هفتگیِ اینستاگرام</b>\n\n" + igstats.format_weekly(w)
+        await _send_managers(app.bot, txt)
+        ig_uid = _ig_admin_uid()
+        if ig_uid:
+            try:
+                await app.bot.send_message(ig_uid, txt, parse_mode=ParseMode.HTML)
+            except Exception:  # noqa: BLE001
+                pass
+        print("[worktasks] گزارشِ هفتگیِ اینستاگرام ارسال شد.")
+    except Exception as e:  # noqa: BLE001
+        print(f"[worktasks] گزارشِ هفتگی ناموفق: {e!r}")
 
 
 def _norm_handle(s):

@@ -288,7 +288,7 @@ async def route_issues(issues: list, staff: list) -> list:
         return []
 
 
-async def ig_content_plan(a: dict, inventory: dict | None = None, rivals: str = "") -> dict:
+async def ig_content_plan(a: dict, inventory: dict | None = None, rivals: str = "", covered: str = "") -> dict:
     """مدیرِ محتوا/آنالیزورِ ارشدِ مسلط به ساعت: از آنالیزِ واقعیِ پیج + موجودیِ واقعیِ فروشگاه، تقویمِ ۷روزه
     + planِ پوششِ برند/رفرنس + تسک می‌سازد (موتورِ استدلالیِ کامل).
 
@@ -331,6 +331,8 @@ async def ig_content_plan(a: dict, inventory: dict | None = None, rivals: str = 
         f"بهترین ساعتِ انتشار: {bh.get('hour', '؟')} · بهترین روز: {bw.get('name', '؟')}\n"
         f"روندِ تعامل: {a.get('eng_trend_pct')}٪ · پستِ ۷روز: {a.get('posts_7d')} · نرخِ تعامل: {a.get('engagement_rate')}%\n"
         f"پوششِ برندِ اخیر (تعداد): {bc}\nنمونهٔ کپشن‌های اخیر:\n- " + "\n- ".join(caps[:8]) + inv_line
+        + (f"\n\nمدل‌هایی که در پلن‌های اخیر پوشش داده شده‌اند (این‌ها را تکرار نکن مگر واقعاً پرفروش؛ به‌جایش "
+           f"بقیهٔ رفرنس‌های موجودِ فهرست را بیاور تا همه به‌مرور پوشش داده شوند):\n{covered}" if covered else "")
         + (f"\n\nرقبا (برای جلوزدن، نه کپی):\n{rivals}" if rivals else "")
     )
     try:
