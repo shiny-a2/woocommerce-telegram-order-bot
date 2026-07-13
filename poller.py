@@ -391,6 +391,9 @@ async def run(app):
             await worktasks.maybe_manager_report(app)  # پایانِ شیفت: گزارشِ عملکرد به مدیران
             await _maybe_morning_worklist(app)  # «کارِ امروز» سرِ شیفت (و علامتِ ارسال)
             await worktasks.maybe_auto_crawl(app)  # خزشِ خودکارِ روزانه: مشکلات → تسکِ خودکار به مسئول‌ها
+            if cycle % 60 == 0:  # ~ساعتی یک‌بار: اسنپ‌شاتِ آمارِ اینستاگرام (کش‌شده) برای تاریخچهٔ رشد
+                import igstats
+                await igstats.maybe_snapshot()
             if cycle % 5 == 0:  # هر ~۵ دقیقه
                 await _maybe_due_reminders(app)
             await reports.prewarm()  # کش را گرم نگه دار → گزارش‌های ادمین آنی

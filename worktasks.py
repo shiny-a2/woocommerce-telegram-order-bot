@@ -362,12 +362,14 @@ def _parse_attendance(text):
 
 def _format_help_text() -> str:
     return (
-        "⚠️ فرمتِ گزارشت کامل نیست. لطفاً <b>دقیقاً</b> این‌طور بفرست — اول تاریخ، بعد ساعتِ ورود–خروج، بعد کارها:\n\n"
+        "🙏 مرسی که گزارش دادی! فقط یه نکتهٔ کوچیک تا زحماتت دقیق ثبت بشه — لطفاً اول <b>تاریخ</b> و "
+        "<b>ساعتِ ورود–خروج</b> رو هم بنویس، بعد کارها. این‌طوری ساعاتِ کارکردت برای حقوق هم درست حساب می‌شه. "
+        "درست مثلِ این 👇\n\n"
         "<code>شنبه ۱۴۰۵/۰۴/۲۰\n"
         "۱۰:۰۵ - ۱۸:۳۰\n"
         "- کارِ اول\n"
         "- کارِ دوم</code>\n\n"
-        "ثبتِ ساعتِ ورود و خروج برای محاسبه‌ی ساعاتِ کارکرد و حقوق لازم است. 🙏"
+        "دوباره با همین قالب بفرست، ممنونم 💚"
     )
 
 
@@ -654,9 +656,11 @@ async def _process_report(msg, user, text) -> None:
     if kind:
         _add_report(user.id, user.full_name, text, kind=kind)
         if kind == "leave":
-            await msg.reply_text("🌴 مرخصیت برای امروز ثبت شد. روزِ خوبی داشته باشی! (امروز ارزیابی و تسکی نداری.)")
+            await msg.reply_text("🌴 مرخصیت ثبت شد؛ حسابی استراحت کن و انرژی بگیر 💚 "
+                                 "امروز خیالت راحت — ارزیابی و تسکی نداری. 🌷")
         else:
-            await msg.reply_text("📴 روزِ تعطیل برایت ثبت شد. (امروز ارزیابی و تسکی نداری.)")
+            await msg.reply_text("📴 امروز تعطیله و ثبت شد؛ حسابی به خودت برس و لذت ببر 😊 "
+                                 "(امروز ارزیابی و تسکی نداری.)")
         await maybe_send_perf_when_complete(msg.get_bot())
         return
     att = _parse_attendance(text)
@@ -666,8 +670,9 @@ async def _process_report(msg, user, text) -> None:
     rid = _add_report(user.id, user.full_name, text, attendance=att)
     h, mnt = att["worked_min"] // 60, att["worked_min"] % 60
     await msg.reply_text(
-        f"📝 گزارشت ثبت شد ✅\n🕒 ورود {_fa(att['check_in'])} · خروج {_fa(att['check_out'])}"
-        f" · کارکرد {_fa(f'{h}:{mnt:02d}')}. ممنون! 🙏")
+        f"🌟 دمت گرم، گزارشت ثبت شد!\n"
+        f"🕒 ورود {_fa(att['check_in'])} · خروج {_fa(att['check_out'])} · کارکرد {_fa(f'{h}:{mnt:02d}')}\n"
+        f"ممنون بابتِ زحمتی که امروز کشیدی 🙏💚")
     if wt_brain.enabled():
         asyncio.create_task(_ai_followup(msg, user, rid, text))
     else:
@@ -689,7 +694,8 @@ async def _ai_followup(msg, user, rid, report_text):
         if qs:
             _awaiting_answers[user.id] = rid
             _store_report_field(rid, "ai_questions", qs)
-            await msg.reply_text(f"🤖 برای ثبتِ عملکردت، لطفاً کوتاه پاسخ بده:\n\n{qs}")
+            await msg.reply_text(
+                f"🤖 مرسی از گزارشت! برای اینکه زحماتت کامل و درست دیده بشه، لطفاً کوتاه به این‌ها جواب بده 👇\n\n{qs}")
         else:  # سؤالی نبود → گزارش همین‌جا تمام است
             await maybe_send_perf_when_complete(msg.get_bot())
     except Exception as e:
@@ -720,8 +726,9 @@ async def _finalize_eval(msg, user, rid, answers):
                 made += 1
     except Exception as e:
         print(f"[worktasks] finalize خطا: {e!r}")
-    tail = f"\n📌 {_fa(made)} تسکِ پیگیری برای فردا برایت ثبت شد (با /tasks ببین)." if made else ""
-    await msg.reply_text("✅ ممنون، ثبت شد. عملکردت برای مدیر لحاظ شد." + tail)
+    tail = (f"\n📌 برای فردا {_fa(made)} تسکِ کوچک برات گذاشتم که مسیرت روشن باشه (با /tasks ببین). 💪"
+            if made else "")
+    await msg.reply_text("✅ عالی بود، ثبت شد! زحماتت برای مدیر لحاظ و دیده شد. دمت گرم 🙌" + tail)
     await maybe_send_perf_when_complete(msg.get_bot())
 
 
@@ -901,7 +908,7 @@ async def on_group_message(update, context) -> bool:
         _seen_id(aid, aname)
         _add_task(aid, aname, user.id, user.full_name, text)
     who = "، ".join(a[1] for a in assignees)
-    await msg.reply_text(f"🗂️ تسک برای {who} ثبت شد. (با /tasks قابلِ مشاهده و بستن است)")
+    await msg.reply_text(f"🗂️ چشم! یه تسک برای {who} ثبت شد و به لیستش اضافه شد 💪 (با /tasks می‌بینه و می‌بنده)")
     return True
 
 
@@ -924,7 +931,7 @@ async def on_callback_hook(q, context) -> bool:
             await _ans(q)
             return True
         if _task_done(tid, uid):
-            await _ans(q, "✅ ثبت شد.")
+            await _ans(q, "🎉 آفرین! انجام شد 💪")
             try:
                 rows = _open_tasks(uid)
                 if rows:
@@ -960,7 +967,7 @@ async def on_callback_hook(q, context) -> bool:
     if action == "tasks":  # «تسک‌های من»
         await _ans(q)
         rows = _open_tasks(uid)
-        body = _tasks_text(rows) if rows else "✅ تسکِ بازی نداری."
+        body = _tasks_text(rows) if rows else "✅ آفرین! هیچ تسکِ بازی نداری، همه‌چیز به‌روزه 🎉"
         try:
             await q.message.reply_text(body, parse_mode=ParseMode.HTML,
                                        reply_markup=_tasks_kb(rows) if rows else None)
@@ -1002,9 +1009,10 @@ async def _ans(q, text="", alert=False):
 
 # ---------- دستورها ----------
 def _tasks_text(rows) -> str:
-    lines = [f"🗂️ <b>تسک‌های بازِ تو</b> ({len(rows)}):", ""]
+    lines = [f"🗂️ <b>تسک‌های بازِ تو</b> ({_fa(len(rows))}) — مطمئنم از پسشون برمیای 💪", ""]
     for tid, text, assigner in rows:
         lines.append(f"• <code>#{tid}</code> — {text}  <i>(از {assigner or '—'})</i>")
+    lines += ["", "<i>هر کدوم رو تموم کردی، دکمهٔ زیرش رو بزن ✅ — قدم‌به‌قدم عالی پیش می‌ری.</i>"]
     return "\n".join(lines)
 
 
@@ -1046,7 +1054,7 @@ async def cmd_tasks(update, context):
     _seen(user)
     rows = _open_tasks(user.id)
     if not rows:
-        await msg.reply_text("✅ تسکِ بازی نداری.")
+        await msg.reply_text("✅ آفرین! هیچ تسکِ بازی نداری، همه‌چیز به‌روزه 🎉")
         return
     await msg.reply_text(_tasks_text(rows), parse_mode=ParseMode.HTML, reply_markup=_tasks_kb(rows))
 
@@ -1086,7 +1094,7 @@ async def cmd_work(update, context):
     if not msg or not user:
         return
     _seen(user)
-    await msg.reply_text("🗂️ <b>مرکزِ گزارشِ کار</b>\nیکی را انتخاب کن 👇",
+    await msg.reply_text("🗂️ <b>مرکزِ گزارشِ کار</b>\nسلام قهرمان 👋 یکی رو انتخاب کن 👇",
                          parse_mode=ParseMode.HTML, reply_markup=work_menu_kb(_is_admin(user.id)))
 
 
@@ -1152,7 +1160,8 @@ async def maybe_report_reminder(app):
     try:
         await app.bot.send_message(
             group,
-            "⏰ <b>یادآوریِ گزارشِ کارِ امروز</b>\nاین عزیزان هنوز گزارش نداده‌اند — لطفاً همین حالا ثبت کنید 👇\n" + mentions,
+            "🌸 <b>یادآوریِ مهربانانهٔ گزارشِ امروز</b>\nمی‌دونم امروز حسابی زحمت کشیدید 💚 "
+            "این عزیزان فقط گزارششون مونده — هر وقت فرصت کردی چند خط برامون بنویس تا زحماتت دیده بشه 👇\n" + mentions,
             parse_mode=ParseMode.HTML, reply_markup=kb)
         print(f"[worktasks] یادآوریِ گزارش به {len(missing)} نفر ارسال شد.")
     except Exception as e:

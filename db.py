@@ -83,6 +83,15 @@ def init():
             PRIMARY KEY (phone, chat_id)
         )"""
     )
+    _conn.execute(
+        """CREATE TABLE IF NOT EXISTS ig_snapshots (
+            ts                   REAL,
+            followers            INTEGER,
+            media_count          INTEGER,
+            avg_engagement       REAL,
+            avg_engagement_rate  REAL
+        )"""
+    )
     _conn.commit()
 
 
@@ -186,6 +195,33 @@ def newcard_phones(chat_id):
         return _conn.execute(
             "SELECT phone, message_id FROM crm_newcards WHERE chat_id=?", (int(chat_id),)
         ).fetchall()
+
+
+# ---------- اسنپ‌شاتِ آمارِ اینستاگرام (برای آنالیزِ رشد روی دادهٔ ذخیره‌شده) ----------
+def ig_snapshot_add(followers, media_count, avg_eng, avg_eng_rate):
+    with _lock:
+        _conn.execute(
+            "INSERT INTO ig_snapshots(ts, followers, media_count, avg_engagement, avg_engagement_rate) "
+            "VALUES (?,?,?,?,?)",
+            (time.time(), int(followers or 0), int(media_count or 0), avg_eng, avg_eng_rate),
+        )
+        _conn.commit()
+
+
+def ig_last_snapshot_ts():
+    with _lock:
+        r = _conn.execute("SELECT MAX(ts) FROM ig_snapshots").fetchone()
+        return r[0] if r and r[0] else 0
+
+
+def ig_followers_ago(seconds):
+    """آخرین فالوورِ ثبت‌شده که دستِ‌کم `seconds` ثانیه قدیمی است (یا None اگر آن‌قدر تاریخچه نداریم)."""
+    with _lock:
+        r = _conn.execute(
+            "SELECT followers FROM ig_snapshots WHERE ts<=? ORDER BY ts DESC LIMIT 1",
+            (time.time() - seconds,),
+        ).fetchone()
+        return r[0] if r else None
 
 
 def count_orders() -> int:
