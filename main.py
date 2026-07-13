@@ -95,6 +95,7 @@ _COMMANDS = [
     BotCommand("health", "سلامت و سنجش مدیر داخلی (مدیر)"),
     BotCommand("directives", "دستورهای دائمی مدیر"),
     BotCommand("igreport", "آنالیز پیج اینستاگرام (مدیر)"),
+    BotCommand("igplan", "برنامه و تقویم محتوایی اینستاگرام (مدیر)"),
     BotCommand("setigadmin", "تعیین ادمین اینستاگرام (مدیر)"),
     BotCommand("linkwp", "لینک پرسنل به کاربر وردپرس (مدیر)"),
     BotCommand("setworkgroup", "ثبت این گروه به‌عنوان گروه کار (مدیر)"),

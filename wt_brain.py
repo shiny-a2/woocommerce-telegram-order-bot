@@ -284,3 +284,53 @@ async def route_issues(issues: list, staff: list) -> list:
     except Exception as e:  # noqa: BLE001
         print(f"[wt_brain] route_issues خطا: {e!r}")
         return []
+
+
+async def ig_content_plan(a: dict) -> dict:
+    """مدیرِ محتوا/آنالیزورِ ارشدِ مسلط به ساعت: از آنالیزِ واقعیِ پیج، تقویمِ ۷روزه + planِ برند + تسک می‌سازد.
+
+    ورودی: خروجیِ igstats.summary(). خروجی: {summary, calendar[], brand_plan[], tasks[]}.
+    """
+    if not enabled() or not a or not a.get("ok"):
+        return {}
+    byt = a.get("by_type") or {}
+    type_line = "، ".join(f"{t}: میانگینِ تعامل {v.get('avg_eng')} ({v.get('count')} پست)"
+                          for t, v in byt.items()) or "؟"
+    bh, bw, bc = a.get("best_hour") or {}, a.get("best_weekday") or {}, a.get("brand_coverage") or {}
+    caps = a.get("recent_captions") or []
+    system = (
+        "تو «مدیرِ محتوا و آنالیزورِ ارشدِ اینستاگرام» و کاملاً مسلط به بازار و برندهای ساعت (مخاطبِ ایرانی، سبک‌ها، "
+        "پوزیشنینگِ برندها و قیمت‌ها) هستی و برای یک گالریِ ساعتِ حرفه‌ای کار می‌کنی. بر اساسِ آنالیزِ واقعیِ پیج (که "
+        "می‌دهم) یک برنامهٔ محتواییِ حرفه‌ای و داده‌محور بساز:\n"
+        "۱) تقویمِ ۷روزه (شنبه تا جمعه): برای هر روز نوعِ محتوا (پست/ریل/کاروسل/استوری)، برند یا تمِ ساعتِ پیشنهادی، "
+        "بهترین ساعتِ انتشار، و یک ایدهٔ استوری. از بهترین نوع/ساعت/روزِ واقعی استفاده کن.\n"
+        "۲) planِ پوششِ برند: از coverage و کپشن‌های اخیر بفهم کدام برندها کم‌دیده شده‌اند و باید بیشتر بیایند "
+        "(فقط برندهایی که واقعاً در پیج/فروشگاه هستند؛ برندِ من‌درآوردی نساز).\n"
+        "۳) ۳ تا ۵ تسکِ مشخص، فعل‌محور و عملیِ همین‌هفته برای تیمِ اینستاگرام.\n"
+        "لحن: حرفه‌ای، دقیق و دلگرم‌کننده. فقط و فقط یک JSON با این کلیدها، بدونِ متنِ اضافه:\n"
+        "{\"summary\":\"...\",\"calendar\":[{\"day\":\"...\",\"type\":\"...\",\"brand\":\"...\",\"time\":\"...\",\"story\":\"...\"}],"
+        "\"brand_plan\":[\"...\"],\"tasks\":[\"...\"]}"
+    )
+    user = (
+        f"دستهٔ پیج: {a.get('category')}\nفالوور: {a.get('followers')} · رشدِ ۷روز: {a.get('growth_7d')}\n"
+        f"تعامل به‌تفکیکِ نوع: {type_line}\n"
+        f"بهترین ساعتِ انتشار: {bh.get('hour', '؟')} · بهترین روز: {bw.get('name', '؟')}\n"
+        f"روندِ تعامل: {a.get('eng_trend_pct')}٪ · پستِ ۷روز: {a.get('posts_7d')} · نرخِ تعامل: {a.get('engagement_rate')}%\n"
+        f"پوششِ برندِ اخیر (تعداد): {bc}\nنمونهٔ کپشن‌های اخیر:\n- " + "\n- ".join(caps[:8])
+    )
+    try:
+        raw = (await _chat(system, user, 3000)).strip()
+        if raw.startswith("```"):
+            raw = raw.strip("`")
+            if raw[:4].lower() == "json":
+                raw = raw[4:]
+        d = json.loads(raw)
+        return {
+            "summary": str(d.get("summary", "")).strip(),
+            "calendar": [x for x in (d.get("calendar") or []) if isinstance(x, dict)][:7],
+            "brand_plan": [str(x).strip() for x in (d.get("brand_plan") or []) if str(x).strip()][:8],
+            "tasks": [str(x).strip() for x in (d.get("tasks") or []) if str(x).strip()][:6],
+        }
+    except Exception as e:  # noqa: BLE001
+        print(f"[wt_brain] ig_content_plan خطا: {e!r}")
+        return {}

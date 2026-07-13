@@ -617,13 +617,16 @@ async def _staff_context(user_id) -> str:
     if user_id and user_id == _ig_admin_uid():
         try:
             r = await igstats.summary()
-            if r.get("ok"):
-                g = r.get("growth_1d")
-                parts.append(
-                    "کارِ واقعیِ اینستاگرام (آنالیزِ پیج): "
-                    f"پستِ ۲۴ساعت={r.get('posts_24h', 0)}، پستِ ۷روز={r.get('posts_7d', 0)}، "
-                    f"رشدِ فالوورِ امروز={('؟' if g is None else g)}، ریچِ پست‌های اخیر={r.get('total_reach', 0)}، "
-                    f"فالوِ جذب‌شده از پست‌ها={r.get('total_follows_from_posts', 0)}، سیو={r.get('total_saves', 0)}")
+            fl = igstats.facts_line(r)
+            if fl:
+                parts.append(fl)
+                bc = r.get("brand_coverage") or {}
+                if bc:
+                    parts.append("پوششِ برندِ اخیرِ پیج: " + "، ".join(f"{b}×{c}" for b, c in list(bc.items())[:6]))
+                recs = r.get("recommendations") or []
+                if recs:
+                    parts.append("توصیه‌های آنالیزورِ محتوا برای این ادمین (در نمره‌دهی و تسک لحاظ کن): "
+                                 + "؛ ".join(x["text"] for x in recs[:4]))
         except Exception as e:  # noqa: BLE001
             print(f"[worktasks] ig staff-context خطا: {e!r}")
     wp = _wp_link(user_id)
@@ -1678,6 +1681,55 @@ def _target_user(msg):
         return (t.id, t.full_name)
     ms = _mentioned_users(msg)
     return ms[0] if ms else None
+
+
+def _igplan_text(plan, made) -> str:
+    L = ["📅 <b>برنامهٔ محتواییِ اینستاگرام</b> — مدیرِ متخصصِ ساعت", ""]
+    if plan.get("summary"):
+        L += [html.escape(plan["summary"]), ""]
+    for d in plan.get("calendar") or []:
+        line = (f"• <b>{html.escape(str(d.get('day', '')))}</b> — {html.escape(str(d.get('type', '')))}"
+                + (f" · {html.escape(str(d.get('brand', '')))}" if d.get("brand") else "")
+                + (f" · ⏰{html.escape(str(d.get('time', '')))}" if d.get("time") else ""))
+        if d.get("story"):
+            line += f"\n   📸 {html.escape(str(d.get('story')))}"
+        L.append(line)
+    if plan.get("brand_plan"):
+        L += ["", "🏷️ <b>پوششِ برند:</b>"] + [f"• {html.escape(x)}" for x in plan["brand_plan"]]
+    if plan.get("tasks"):
+        L += ["", "🎯 <b>تسک‌های این هفته:</b>"] + [f"• {html.escape(x)}" for x in plan["tasks"]]
+    if made:
+        L += ["", f"✅ {_fa(made)} تسک برای ادمینِ اینستاگرام ثبت شد (با /tasks می‌بیند)."]
+    elif plan.get("tasks") and not _ig_admin_uid():
+        L += ["", "<i>برای ثبتِ خودکارِ این تسک‌ها، اول با /setigadmin ادمینِ پیج را مشخص کن.</i>"]
+    return "\n".join(L)
+
+
+async def cmd_igplan(update, context):
+    """تقویمِ محتواییِ اینستاگرام (مدیرِ متخصصِ ساعت) + ثبتِ تسک برای ادمینِ پیج (فقط مدیر)."""
+    msg = update.effective_message
+    user = update.effective_user
+    if not msg or not user or not _is_admin(user.id):
+        return
+    wait = await msg.reply_text("📅 در حال ساختِ برنامهٔ محتوایی (آنالیزِ پیج + مدیرِ متخصصِ ساعت)…")
+    r = await igstats.summary()
+    if not r.get("ok"):
+        await wait.edit_text("آنالیزِ اینستاگرام در دسترس نیست؛ کمی بعد دوباره امتحان کن.")
+        return
+    plan = await wt_brain.ig_content_plan(r)
+    if not plan or not (plan.get("calendar") or plan.get("tasks")):
+        await wait.edit_text("ساختِ برنامه فعلاً ممکن نشد (مغزِ AI پاسخ نداد). کمی بعد دوباره بزن.")
+        return
+    made = 0
+    ig_uid = _ig_admin_uid()
+    today = clock.tehran_now().strftime("%Y-%m-%d")
+    if ig_uid and plan.get("tasks") and db.get_meta("last_igplan_day") != today:  # روزی یک‌بار، ضدِ تکرار
+        db.set_meta("last_igplan_day", today)
+        ig_name = _staff_name(ig_uid) or "ادمینِ اینستاگرام"
+        for t in plan["tasks"][:5]:
+            _add_task(ig_uid, ig_name, user.id, "🤖 مدیرِ محتوا", t)
+            made += 1
+    await wait.edit_text(_igplan_text(plan, made), parse_mode=ParseMode.HTML)
 
 
 async def cmd_setigadmin(update, context):

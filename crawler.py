@@ -71,16 +71,11 @@ async def _ig():
     if not r.get("ok"):
         return [], "آنالیزِ اینستاگرام فعلاً در دسترس نیست"
     issues = []
-    if (r.get("posts_24h") or 0) == 0:
-        issues.append({"key": "ig_nopost", "metric": 0, "dynamic": False,
-                       "text": "امروز هیچ پستی در اینستاگرام گذاشته نشده — یک پست/استوریِ محصول بگذار"})
-    g = r.get("growth_1d")
-    if g is not None and g < 0:
-        issues.append({"key": "ig_neg_growth", "metric": abs(int(g)), "dynamic": True,
-                       "text": f"رشدِ فالوورِ اینستاگرامِ امروز منفی ({_fa(g)}) — یک اقدامِ جذب (ریلز/استوریِ تعاملی)"})
-    if r.get("best_reach_post") or r.get("best_post"):
-        issues.append({"key": "ig_promote", "metric": 0, "dynamic": False,
-                       "text": "بهترین پستِ اخیرِ اینستاگرام را دوباره پروموت/استوری کن"})
+    for rec in (r.get("recommendations") or []):
+        if rec.get("priority") == "low":  # نکاتِ کم‌اولویت را تسکِ خودکار نکن (فقط در /igreport بیایند)
+            continue
+        issues.append({"key": rec["key"], "metric": rec.get("metric"), "dynamic": False,
+                       "text": "📸 اینستاگرام: " + rec["text"]})
     return issues, ""
 
 
