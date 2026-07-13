@@ -939,6 +939,17 @@ def _set_holiday(day, on=True):
     db.set_meta(f"holiday:{day}", "1" if on else "0")
 
 
+def _pending_answer_rid(user_id):
+    """ridِ گزارشی که سؤالش پرسیده شده ولی هنوز پاسخ/ارزیابی نشده — بازیابیِ حالتِ «منتظرِ پاسخ» پس از ری‌استارت."""
+    cutoff = time.time() - 2 * 24 * 3600
+    with db._lock:
+        r = db._conn.execute(
+            "SELECT id FROM wt_reports WHERE user_id=? AND kind='work' "
+            "AND COALESCE(ai_questions,'')<>'' AND COALESCE(ai_answers,'')='' AND COALESCE(ai_score,'')='' "
+            "AND created_ts>=? ORDER BY id DESC LIMIT 1", (int(user_id), cutoff)).fetchone()
+    return r[0] if r else None
+
+
 # ---------- هوکِ پیامِ گروه (از on_text صدا زده می‌شود) ----------
 async def on_group_message(update, context) -> bool:
     """در گروهِ گزارشِ کار: کشفِ پرسنل + ثبتِ تسک (منشنِ مدیر) + گزارشِ روزانه.
@@ -956,9 +967,9 @@ async def on_group_message(update, context) -> bool:
     _seen(user)  # کشفِ خودکارِ پرسنل
     text = (msg.text or "").strip()
 
-    # پاسخِ سؤالاتِ ارزیابیِ AI (بعد از گزارش)
-    if user.id in _awaiting_answers:
-        rid = _awaiting_answers.pop(user.id)
+    # پاسخِ سؤالاتِ ارزیابیِ AI (بعد از گزارش) — حتی اگر حالتِ حافظه با ری‌استارت پاک شده باشد، از DB بازیابی می‌شود
+    rid = _awaiting_answers.pop(user.id, None) or _pending_answer_rid(user.id)
+    if rid:
         await _finalize_eval(msg, user, rid, text)
         return True
 
