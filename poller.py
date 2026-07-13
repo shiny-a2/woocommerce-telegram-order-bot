@@ -390,6 +390,7 @@ async def run(app):
             await worktasks.maybe_report_reminder(app)  # پایانِ شیفت: یادآوریِ گزارش به نداده‌ها
             await worktasks.maybe_manager_report(app)  # پایانِ شیفت: گزارشِ عملکرد به مدیران
             await worktasks.maybe_ig_weekly(app)  # شنبه‌ها: جمع‌بندیِ هفتگیِ اینستاگرام (فیدبک)
+            await worktasks.maybe_ig_autoplan(app)  # شنبه‌ها: پلنِ محتواییِ خودکارِ هفته + تسکِ روزانه
             await _maybe_morning_worklist(app)  # «کارِ امروز» سرِ شیفت (و علامتِ ارسال)
             await worktasks.maybe_auto_crawl(app)  # خزشِ خودکارِ روزانه: مشکلات → تسکِ خودکار به مسئول‌ها
             if cycle % 60 == 0:  # ~ساعتی یک‌بار: اسنپ‌شاتِ آمارِ اینستاگرام (کش‌شده) برای تاریخچهٔ رشد

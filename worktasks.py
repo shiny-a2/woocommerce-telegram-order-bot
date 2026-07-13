@@ -1683,6 +1683,45 @@ def _target_user(msg):
     return ms[0] if ms else None
 
 
+_PWDAY = {5: "شنبه", 6: "یک‌شنبه", 0: "دوشنبه", 1: "سه‌شنبه", 2: "چهارشنبه", 3: "پنجشنبه", 4: "جمعه"}
+
+
+def _days_until_friday(now):
+    """نامِ روزها از «امروز» تا «جمعه» (پایانِ هفتهٔ ایرانی) — برای پلنِ میان‌هفته."""
+    import datetime
+    out, d = [], now
+    for _ in range(7):
+        out.append(_PWDAY[d.weekday()])
+        if d.weekday() == 4:  # جمعه
+            break
+        d = d + datetime.timedelta(days=1)
+    return out
+
+
+def _day_task_text(d) -> str:
+    """یک روزِ تقویم → متنِ تسکِ روزانهٔ ریز و دقیق برای ادمینِ پیج (پست + ≥۱۰ استوریِ رفرنس‌دار)."""
+    L = [f"📅 {d.get('day', '')} — {d.get('type', '')}" + (f" · ساعت {d.get('time', '')}" if d.get("time") else "")]
+    if d.get("brand"):
+        L.append(f"🛍 محصول/رفرنس: {d.get('brand')}")
+    if d.get("hook"):
+        L.append(f"🎣 قلابِ کپشن: {d.get('hook')}")
+    if d.get("hashtags"):
+        L.append(f"#️⃣ هشتگ‌ها: {d.get('hashtags')}")
+    if d.get("stories"):
+        L.append(f"📸 استوری‌های امروز (≥۱۰، با رفرنس): {d.get('stories')}")
+    return "\n".join(str(x) for x in L).replace("<", "‹").replace(">", "›")
+
+
+def _close_prev_igplan_tasks(ig_uid) -> int:
+    """تسک‌های بازِ پلنِ محتواییِ قبلِ همین ادمین را می‌بندد تا هفته‌به‌هفته انباشته نشوند."""
+    with db._lock:
+        cur = db._conn.execute(
+            "UPDATE wt_tasks SET status='done', done_ts=? WHERE assignee_id=? AND status='open' "
+            "AND assigner_name LIKE '%محتوا%'", (time.time(), int(ig_uid)))
+        db._conn.commit()
+        return cur.rowcount
+
+
 def _chunk_html(text, limit=3800):
     """متنِ HTML را روی مرزِ خط به تکه‌های ≤limit تقسیم می‌کند (سقفِ ۴۰۹۶ تلگرام)."""
     chunks, cur = [], ""
@@ -1707,19 +1746,17 @@ def _igplan_text(plan, made) -> str:
                 + (f" · ⏰{html.escape(str(d.get('time', '')))}" if d.get("time") else ""))
         if d.get("hook"):
             line += f"\n   🎣 {html.escape(str(d.get('hook')))}"
-        if d.get("story"):
-            line += f"\n   📸 {html.escape(str(d.get('story')))}"
         if d.get("hashtags"):
             line += f"\n   #️⃣ {html.escape(str(d.get('hashtags')))}"
+        if d.get("stories"):
+            line += f"\n   📸 استوری‌ها (≥۱۰): {html.escape(str(d.get('stories')))}"
         L.append(line)
     if plan.get("brand_plan"):
         L += ["", "🏷️ <b>پوششِ برند:</b>"] + [f"• {html.escape(x)}" for x in plan["brand_plan"]]
-    if plan.get("tasks"):
-        L += ["", "🎯 <b>تسک‌های این هفته:</b>"] + [f"• {html.escape(x)}" for x in plan["tasks"]]
     if made:
-        L += ["", f"✅ {_fa(made)} تسک برای ادمینِ اینستاگرام ثبت شد (با /tasks می‌بیند)."]
-    elif plan.get("tasks") and not _ig_admin_uid():
-        L += ["", "<i>برای ثبتِ خودکارِ این تسک‌ها، اول با /setigadmin ادمینِ پیج را مشخص کن.</i>"]
+        L += ["", f"✅ {_fa(made)} تسکِ روزانه برای ادمینِ اینستاگرام ثبت شد (با /tasks می‌بیند)."]
+    elif not _ig_admin_uid():
+        L += ["", "<i>برای ثبتِ خودکارِ تسکِ روزانه، اول با /setigadmin ادمینِ پیج را مشخص کن.</i>"]
     return "\n".join(L)
 
 
@@ -1729,31 +1766,13 @@ async def cmd_igplan(update, context):
     user = update.effective_user
     if not msg or not user or not _is_admin(user.id):
         return
-    wait = await msg.reply_text("📅 در حال ساختِ برنامهٔ محتوایی (آنالیزِ پیج + مدیرِ متخصصِ ساعت)…")
-    r = await igstats.summary()
-    if not r.get("ok"):
-        await wait.edit_text("آنالیزِ اینستاگرام در دسترس نیست؛ کمی بعد دوباره امتحان کن.")
+    days = _days_until_friday(clock.tehran_now())
+    wait = await msg.reply_text(f"📅 در حال ساختِ برنامهٔ محتواییِ کامل از «{days[0]}» تا «جمعه» "
+                                "(با ≥۱۰ استوریِ روزانه)… لطفاً ~۲ تا ۳ دقیقه صبر کن.")
+    plan, made = await _build_and_assign_igplan(user.id, days)
+    if not plan:
+        await wait.edit_text("ساختِ برنامه فعلاً ممکن نشد (آنالیز/مغزِ AI پاسخ نداد). کمی بعد دوباره بزن.")
         return
-    inventory = await igstats.instock_by_brand()  # ~۴۰۰ محصولِ موجودِ سایت (پوششِ بهترِ رفرنس‌ها)
-    rivals_brief = igstats.rivals_brief_stored()  # از اسنپ‌شاتِ ذخیره‌شده (سریع، بدونِ فراخوانِ زنده)
-    covered = " | ".join(db.last_plan_models(14))  # مدل‌های پوشش‌داده‌شدهٔ ۲هفتهٔ اخیر (تکرارنشدن)
-    plan = await wt_brain.ig_content_plan(r, inventory, rivals_brief, covered)
-    if not plan or not (plan.get("calendar") or plan.get("tasks")):
-        await wait.edit_text("ساختِ برنامه فعلاً ممکن نشد (مغزِ AI پاسخ نداد). کمی بعد دوباره بزن.")
-        return
-    # ذخیرهٔ مدل‌های این پلن (برای پوشش/عدمِ تکرار در پلن‌های بعد)
-    _models = [str(d.get("brand", "")).strip() for d in (plan.get("calendar") or []) if str(d.get("brand", "")).strip()]
-    if _models:
-        db.plan_add(" | ".join(_models), "")
-    made = 0
-    ig_uid = _ig_admin_uid()
-    today = clock.tehran_now().strftime("%Y-%m-%d")
-    if ig_uid and plan.get("tasks") and db.get_meta("last_igplan_day") != today:  # روزی یک‌بار، ضدِ تکرار
-        db.set_meta("last_igplan_day", today)
-        ig_name = _staff_name(ig_uid) or "ادمینِ اینستاگرام"
-        for t in plan["tasks"][:5]:
-            _add_task(ig_uid, ig_name, user.id, "🤖 مدیرِ محتوا", t)
-            made += 1
     chunks = _chunk_html(_igplan_text(plan, made))
     try:
         await wait.edit_text(chunks[0], parse_mode=ParseMode.HTML)
@@ -1762,6 +1781,35 @@ async def cmd_igplan(update, context):
         await msg.reply_text(chunks[0], parse_mode=ParseMode.HTML)
     for ch in chunks[1:]:
         await msg.reply_text(ch, parse_mode=ParseMode.HTML)
+
+
+async def _build_and_assign_igplan(actor_id, days):
+    """پلنِ روزآگاه می‌سازد، مدل‌ها را ذخیره می‌کند و تسکِ روزانهٔ ریز به ادمینِ پیج می‌سپارد (با بستنِ پلنِ قبل).
+
+    خروجی: (plan یا None، تعدادِ تسکِ روزانه). مشترکِ /igplan و خزشِ خودکارِ شنبه.
+    """
+    r = await igstats.summary()
+    if not r.get("ok"):
+        return None, 0
+    inventory = await igstats.instock_by_brand()               # محصولاتِ تعداد≥۱ (چرخشی برای پوششِ رفرنس‌ها)
+    rivals_brief = igstats.rivals_brief_stored()                # از اسنپ‌شاتِ ذخیره‌شده (سریع)
+    covered = " | ".join(db.last_plan_models(14))               # عدمِ تکرارِ مدل‌های اخیر
+    plan = await wt_brain.ig_content_plan(r, inventory, rivals_brief, covered, days)
+    cal = (plan or {}).get("calendar") or []
+    if not cal:
+        return None, 0
+    models = [str(d.get("brand", "")).strip() for d in cal if str(d.get("brand", "")).strip()]
+    if models:
+        db.plan_add(" | ".join(models), "")
+    made = 0
+    ig_uid = _ig_admin_uid()
+    if ig_uid:
+        _close_prev_igplan_tasks(ig_uid)                       # پلنِ قبل بسته می‌شود (انباشته نشود)
+        ig_name = _staff_name(ig_uid) or "ادمینِ اینستاگرام"
+        for d in cal:
+            _add_task(ig_uid, ig_name, actor_id, "🤖 مدیرِ محتوا", _day_task_text(d))
+            made += 1
+    return plan, made
 
 
 async def cmd_igweekly(update, context):
@@ -1802,6 +1850,36 @@ async def maybe_ig_weekly(app):
         print("[worktasks] گزارشِ هفتگیِ اینستاگرام ارسال شد.")
     except Exception as e:  # noqa: BLE001
         print(f"[worktasks] گزارشِ هفتگی ناموفق: {e!r}")
+
+
+async def maybe_ig_autoplan(app):
+    """شنبه‌ها یک‌بار: پلنِ کاملِ هفته را خودکار می‌سازد، تسکِ روزانه به ادمینِ پیج می‌سپارد و خلاصه به مدیران."""
+    if not igstats.enabled() or not wt_brain.enabled():
+        return
+    import poller
+    now = clock.tehran_now()
+    if now.weekday() != 5 or not poller._in_shift(now):  # فقط شنبه، داخلِ شیفت
+        return
+    wk = now.strftime("%Y-%W")
+    if db.get_meta("last_ig_autoplan") == wk:
+        return
+    db.set_meta("last_ig_autoplan", wk)
+    try:
+        plan, made = await _build_and_assign_igplan(0, _days_until_friday(now))  # شنبه → کلِ هفته
+        if not plan:
+            return
+        head = f"📅 <b>برنامهٔ محتواییِ هفته (خودکار)</b> — {_fa(made)} تسکِ روزانه به ادمینِ پیج سپرده شد.\n\n"
+        for ch in _chunk_html(head + _igplan_text(plan, made)):
+            await _send_managers(app.bot, ch)
+        ig_uid = _ig_admin_uid()
+        if ig_uid:
+            try:
+                await app.bot.send_message(ig_uid, "📅 برنامهٔ محتواییِ این هفته‌ات آماده شد — با /tasks ببین 💪")
+            except Exception:  # noqa: BLE001
+                pass
+        print(f"[worktasks] پلنِ محتواییِ خودکارِ هفتگی ساخته شد ({_fa(made)} تسک).")
+    except Exception as e:  # noqa: BLE001
+        print(f"[worktasks] پلنِ خودکار ناموفق: {e!r}")
 
 
 def _norm_handle(s):

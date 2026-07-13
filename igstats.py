@@ -330,32 +330,48 @@ async def maybe_snapshot():
 
 
 async def instock_by_brand(sample=400) -> dict:
-    """محصولاتِ موجودِ سایت (stock=instock ⟺ تعداد≥۱) گروه‌بندی بر اساسِ برندِ تشخیص‌داده‌شده از نامِ محصول.
+    """محصولاتی که «تعدادِ موجودی‌شان ≥۱» است (نه صرفِ حضور در کاتالوگ)، گروه‌بندی بر اساسِ برندِ ساعت.
 
-    چند صفحه را ملایم می‌خواند (پوششِ بهترِ رفرنس‌ها). خروجی: {brand: {count, examples:[نام/رفرنس]}}.
+    برای پوششِ همهٔ رفرنس‌ها در طولِ زمان، صفحه‌ها را می‌چرخاند (هر بار پنجرهٔ متفاوتی از کاتالوگ).
+    خروجی: {brand: {count, examples:[نام/رفرنس]}}.
     """
     import woo
-    by = defaultdict(lambda: {"count": 0, "examples": []})
     per = 100
-    pages = max(1, min(6, (int(sample) + per - 1) // per))
-    for page in range(1, pages + 1):
+    pages_n = max(1, min(6, (int(sample) + per - 1) // per))
+    try:
+        total = await woo.total_count("products", {"stock_status": "instock", "status": "publish"})
+    except Exception:  # noqa: BLE001
+        total = 0
+    max_page = max(1, (total + per - 1) // per) if total else pages_n
+    start = int(db.get_meta("ig_inv_page") or 1)
+    if start < 1 or start > max_page:
+        start = 1
+    by = defaultdict(lambda: {"count": 0, "examples": []})
+    got = 0
+    for i in range(pages_n):
+        page = ((start - 1 + i) % max_page) + 1
         try:
             items = await woo.get("products", {
                 "stock_status": "instock", "status": "publish", "per_page": per, "page": page,
-                "orderby": "date", "order": "desc", "_fields": "id,name,sku"})
+                "orderby": "date", "order": "desc", "_fields": "id,name,sku,stock_quantity"})
         except Exception as e:  # noqa: BLE001
             print(f"[igstats] instock fetch p{page}: {e!r}")
             break
         if not items:
             break
         for p in items:
+            q = p.get("stock_quantity")
+            if not (q is not None and int(q) >= 1):  # فقط تعدادِ موجودیِ ≥۱ (طبقِ خواستهٔ کاربر)
+                continue
             name = (p.get("name") or "").strip()
             for b in _detect_brands(name):
                 by[b]["count"] += 1
                 if len(by[b]["examples"]) < 5:
                     sku = p.get("sku")
                     by[b]["examples"].append(name[:42] + (f" [{sku}]" if sku else ""))
+        got += 1
         await asyncio.sleep(0.4)  # ملایم بینِ صفحه‌ها (ضدبلاک)
+    db.set_meta("ig_inv_page", str(((start - 1 + got) % max_page) + 1))  # چرخش برای پوششِ بقیهٔ کاتالوگ
     return dict(sorted(by.items(), key=lambda kv: -kv[1]["count"]))
 
 
