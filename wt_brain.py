@@ -69,7 +69,8 @@ async def followup_questions(name: str, done: str, opent: str, report: str, stor
     if directives:
         user = directives + "\n\n" + user
     try:
-        return await _chat(system, user, 450)
+        # بودجهٔ کافی + استدلالِ کم: در مدلِ استدلالی، بودجهٔ کم را reasoning می‌بلعد و خروجی خالی می‌شود.
+        return await _chat(system, user, 1400, effort="low")
     except Exception as e:
         print(f"[wt_brain] followup_questions خطا: {e!r}")
         return ""

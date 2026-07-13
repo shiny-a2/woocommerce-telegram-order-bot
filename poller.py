@@ -388,6 +388,7 @@ async def run(app):
             await _maybe_leads(app)
             await _maybe_shift_summary(app)
             await worktasks.maybe_report_reminder(app)  # پایانِ شیفت: یادآوریِ گزارش به نداده‌ها
+            await worktasks.maybe_resume_followups(app)  # جبرانِ سؤالِ پیگیریِ گزارش‌های جامانده (ضدِ ری‌استارت)
             await worktasks.maybe_manager_report(app)  # پایانِ شیفت: گزارشِ عملکرد به مدیران
             await worktasks.maybe_ig_weekly(app)  # شنبه‌ها: جمع‌بندیِ هفتگیِ اینستاگرام (فیدبک)
             await worktasks.maybe_ig_autoplan(app)  # شنبه‌ها: پلنِ محتواییِ خودکارِ هفته + تسکِ روزانه

@@ -691,18 +691,38 @@ async def _process_report(msg, user, text) -> None:
         await maybe_send_perf_when_complete(msg.get_bot())
 
 
+_followup_inflight: set = set()  # ridهایی که همین حالا در حالِ تولیدِ سؤال‌اند (ضدِ دوبار‌پرسیِ live/resume)
+
+
+def _followup_asked(rid) -> bool:
+    return db.get_meta(f"followup_asked:{rid}") == "1"
+
+
+def _mark_followup_asked(rid):
+    db.set_meta(f"followup_asked:{rid}", "1")
+
+
+async def _gen_followup_questions(user_id, user_name, report_text) -> str:
+    """کانتکستِ کامل (تسک‌ها + آمارِ فروشگاه + کارِ مانده + دستورهای مدیر) را می‌سازد و سؤال‌های پیگیری را می‌گیرد."""
+    done, opent = _task_summaries(user_id)
+    store = await _store_context()
+    sc = await _staff_context(user_id)
+    if sc:
+        store = (store + "\n" + sc) if store else sc
+    co = _carryover_context(user_id)
+    if co:
+        store = (store + "\n" + co) if store else co
+    directives = _directives_block(user_id)
+    return (await wt_brain.followup_questions(user_name, done, opent, report_text, store, directives)).strip()
+
+
 async def _ai_followup(msg, user, rid, report_text):
+    """مسیرِ زنده: بلافاصله پس از گزارش، سؤالِ پیگیری را همان‌جا (ریپلای) می‌پرسد."""
+    if rid in _followup_inflight:
+        return
+    _followup_inflight.add(rid)
     try:
-        done, opent = _task_summaries(user.id)
-        store = await _store_context()
-        sc = await _staff_context(user.id)
-        if sc:
-            store = (store + "\n" + sc) if store else sc
-        co = _carryover_context(user.id)
-        if co:
-            store = (store + "\n" + co) if store else co
-        directives = _directives_block(user.id)
-        qs = (await wt_brain.followup_questions(user.full_name, done, opent, report_text, store, directives)).strip()
+        qs = await _gen_followup_questions(user.id, user.full_name, report_text)
         if qs:
             _awaiting_answers[user.id] = rid
             _store_report_field(rid, "ai_questions", qs)
@@ -710,8 +730,54 @@ async def _ai_followup(msg, user, rid, report_text):
                 f"🤖 مرسی از گزارشت! برای اینکه زحماتت کامل و درست دیده بشه، لطفاً کوتاه به این‌ها جواب بده 👇\n\n{qs}")
         else:  # سؤالی نبود → گزارش همین‌جا تمام است
             await maybe_send_perf_when_complete(msg.get_bot())
+        _mark_followup_asked(rid)
     except Exception as e:
         print(f"[worktasks] ai_followup خطا: {e!r}")
+    finally:
+        _followup_inflight.discard(rid)
+
+
+async def _resume_followup(bot, rid, user_id, user_name, report_text):
+    """مسیرِ جبرانی: سؤالِ پیگیریِ یک گزارشِ جامانده (که ری‌استارت/کرش وسطش افتاد) را در گروهِ کار با منشن می‌پرسد."""
+    group = _workgroup()
+    if not group or rid in _followup_inflight or user_id in _awaiting_answers:
+        return  # بدونِ گروه، پاسخِ کارمند قابلِ ثبت نیست (هندلرِ گروه آن را می‌گیرد)
+    _followup_inflight.add(rid)
+    try:
+        qs = await _gen_followup_questions(user_id, user_name, report_text)
+        if qs:
+            _awaiting_answers[user_id] = rid
+            _store_report_field(rid, "ai_questions", qs)
+            mention = f'<a href="tg://user?id={user_id}">{html.escape(user_name)}</a>'
+            await bot.send_message(
+                group,
+                f"{mention} 🤖 مرسی از گزارشت! چند سؤالِ کوتاه مونده که زحماتت کامل دیده بشه — "
+                f"لطفاً همین‌جا جواب بده 👇\n\n{qs}", parse_mode=ParseMode.HTML)
+        else:  # سؤالی نبود → گزارش تمام است
+            await maybe_send_perf_when_complete(bot)
+        _mark_followup_asked(rid)
+        print(f"[worktasks] سؤالِ پیگیریِ جامانده برای گزارشِ {rid} ({user_name}) پرسیده شد.")
+    except Exception as e:
+        print(f"[worktasks] resume_followup خطا ({rid}): {e!r}")
+    finally:
+        _followup_inflight.discard(rid)
+
+
+async def maybe_resume_followups(app):
+    """خوددرمان: گزارش‌های کاریِ اخیری که سؤالِ پیگیری‌شان (به‌خاطرِ ری‌استارت/کرش) نپرسیده مانده را جبران می‌کند."""
+    if not wt_brain.enabled():
+        return
+    cutoff = time.time() - 2 * 24 * 3600  # فقط ۲ روزِ اخیر (نه رستاخیزِ گزارش‌های کهنه)
+    with db._lock:
+        rows = db._conn.execute(
+            "SELECT id, user_id, user_name, text FROM wt_reports "
+            "WHERE kind='work' AND COALESCE(ai_questions,'')='' AND COALESCE(ai_score,'')='' "
+            "AND created_ts>=? ORDER BY id", (cutoff,)).fetchall()
+    for rid, uid, uname, text in rows:
+        if rid in _followup_inflight or uid in _awaiting_answers or _followup_asked(rid):
+            continue
+        await _resume_followup(app.bot, rid, uid, uname, text)
+        await asyncio.sleep(0.5)
 
 
 async def _finalize_eval(msg, user, rid, answers):
