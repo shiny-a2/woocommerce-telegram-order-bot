@@ -1691,8 +1691,12 @@ def _igplan_text(plan, made) -> str:
         line = (f"• <b>{html.escape(str(d.get('day', '')))}</b> — {html.escape(str(d.get('type', '')))}"
                 + (f" · {html.escape(str(d.get('brand', '')))}" if d.get("brand") else "")
                 + (f" · ⏰{html.escape(str(d.get('time', '')))}" if d.get("time") else ""))
+        if d.get("hook"):
+            line += f"\n   🎣 {html.escape(str(d.get('hook')))}"
         if d.get("story"):
             line += f"\n   📸 {html.escape(str(d.get('story')))}"
+        if d.get("hashtags"):
+            line += f"\n   #️⃣ {html.escape(str(d.get('hashtags')))}"
         L.append(line)
     if plan.get("brand_plan"):
         L += ["", "🏷️ <b>پوششِ برند:</b>"] + [f"• {html.escape(x)}" for x in plan["brand_plan"]]

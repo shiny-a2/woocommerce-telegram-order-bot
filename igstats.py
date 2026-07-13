@@ -451,7 +451,7 @@ async def cmd_igreport(update, context):
 
 
 # ---------- رقبا (آنالیزِ دادهٔ عمومیِ رقبا از API فقط‌خواندنی؛ بنچمارک + ایده) ----------
-_RIVAL_MIN_AGE = 20 * 3600  # هر رقیب حداکثر ~روزی یک‌بار (جمع‌آوریِ آهسته/انسانی سمتِ سرویسِ صاحبِ سشن)
+_RIVAL_MIN_AGE = 24 * 3600  # هر رقیب هر ۲۴ ساعت یک‌بار (جمع‌آوریِ آهسته/انسانی)
 
 
 async def competitor(handle: str) -> dict:
@@ -517,7 +517,7 @@ async def maybe_collect_rival():
         if m.get("followers"):
             db.rival_snap_add(h, m["followers"], m["posts_7d"], m["avg_eng"])
     elif c.get("error") == "rate_limited":
-        db.set_meta("rival_pause_until", str(_t_now() + 3 * 3600))
+        db.set_meta("rival_pause_until", str(_t_now() + 3600))  # ۱ ساعت مکث، بعد آرام دوباره تلاش
 
 
 async def rivals_report() -> dict:
