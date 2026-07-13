@@ -119,6 +119,10 @@ def wt_init():
             db._conn.execute("ALTER TABLE wt_staff ADD COLUMN role_desc TEXT")
         except sqlite3.OperationalError:
             pass
+        try:  # قفلِ نام: نامِ دستی (مثلاً فارسیِ درست) با پیام‌های بعدیِ تلگرام بازنویسی نشود
+            db._conn.execute("ALTER TABLE wt_staff ADD COLUMN name_locked INTEGER DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
         try:  # کلیدِ دسته‌ی مشکلِ خزش روی تسک (برای جلوگیری از تسکِ تکراریِ همان مشکل)
             db._conn.execute("ALTER TABLE wt_tasks ADD COLUMN source_key TEXT")
         except sqlite3.OperationalError:
@@ -160,9 +164,18 @@ def _seen_id(uid, name, username=None):
             """INSERT INTO wt_staff(user_id, username, name, first_ts, last_ts) VALUES (?,?,?,?,?)
                ON CONFLICT(user_id) DO UPDATE SET
                    username=COALESCE(excluded.username, wt_staff.username),
-                   name=excluded.name, last_ts=excluded.last_ts""",
+                   name=CASE WHEN COALESCE(wt_staff.name_locked,0)=1 THEN wt_staff.name ELSE excluded.name END,
+                   last_ts=excluded.last_ts""",
             (uid, (username or "").lower() or None, name or str(uid), now, now),
         )
+        db._conn.commit()
+
+
+def _set_staff_name(uid, name):
+    """نامِ نمایشیِ یک پرسنل را دستی تنظیم و «قفل» می‌کند تا با پیام‌های بعدی بازنویسی نشود."""
+    with db._lock:
+        db._conn.execute(
+            "UPDATE wt_staff SET name=?, name_locked=1 WHERE user_id=?", ((name or "").strip(), int(uid)))
         db._conn.commit()
 
 
@@ -664,9 +677,10 @@ async def _process_report(msg, user, text) -> None:
 
     اگر گزارش «مرخصی/تعطیل» باشد، فقط ثبت و تأیید می‌شود (بدونِ سؤال/صحت‌سنجی/تسک/نمره).
     """
+    nm = _staff_name(user.id) or user.full_name  # نامِ نمایشیِ فارسیِ ثبت‌شده (اگر قفل شده باشد)
     kind = _leave_kind(text)
     if kind:
-        _add_report(user.id, user.full_name, text, kind=kind)
+        _add_report(user.id, nm, text, kind=kind)
         if kind == "leave":
             await msg.reply_text("🌴 مرخصیت ثبت شد؛ حسابی استراحت کن و انرژی بگیر 💚 "
                                  "امروز خیالت راحت — ارزیابی و تسکی نداری. 🌷")
@@ -679,7 +693,7 @@ async def _process_report(msg, user, text) -> None:
     if not att:  # فرمتِ اشتباه (بدونِ ساعتِ ورود–خروج) → از نو با فرمتِ درست بفرستد
         await msg.reply_text(_format_help_text(), parse_mode=ParseMode.HTML)
         return
-    rid = _add_report(user.id, user.full_name, text, attendance=att)
+    rid = _add_report(user.id, nm, text, attendance=att)
     h, mnt = att["worked_min"] // 60, att["worked_min"] % 60
     await msg.reply_text(
         f"🌟 دمت گرم، گزارشت ثبت شد!\n"
@@ -722,7 +736,7 @@ async def _ai_followup(msg, user, rid, report_text):
         return
     _followup_inflight.add(rid)
     try:
-        qs = await _gen_followup_questions(user.id, user.full_name, report_text)
+        qs = await _gen_followup_questions(user.id, _staff_name(user.id) or user.full_name, report_text)
         if qs:
             _awaiting_answers[user.id] = rid
             _store_report_field(rid, "ai_questions", qs)
@@ -795,12 +809,13 @@ async def _finalize_eval(msg, user, rid, answers):
         if co:
             store = (store + "\n" + co) if store else co
         directives = _directives_block(user.id)
-        ev = await wt_brain.evaluate(user.full_name, done, opent, rep.get("text", ""), qa, store, directives)
+        nm = _staff_name(user.id) or user.full_name  # نامِ فارسیِ ثبت‌شده برای مغز و تسک‌ها
+        ev = await wt_brain.evaluate(nm, done, opent, rep.get("text", ""), qa, store, directives)
         if ev:
             _store_eval(rid, ev)
             for t in sorted(ev.get("tasks") or [],
                             key=lambda x: {"high": 0, "med": 1, "low": 2}.get(x.get("priority"), 1))[:6]:
-                _add_task(user.id, user.full_name, 0, "🤖 مدیرِ داخلی", t["label"])
+                _add_task(user.id, nm, 0, "🤖 مدیرِ داخلی", t["label"])
                 made += 1
     except Exception as e:
         print(f"[worktasks] finalize خطا: {e!r}")
