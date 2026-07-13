@@ -277,6 +277,15 @@ def rival_followers_ago(handle, seconds):
         return r[0] if r else None
 
 
+def rival_last_snap(handle):
+    """آخرین اسنپ‌شاتِ ذخیره‌شدهٔ یک رقیب: {followers, posts_7d, avg_engagement, ts} یا None."""
+    with _lock:
+        r = _conn.execute(
+            "SELECT followers, posts_7d, avg_engagement, ts FROM ig_rival_snap WHERE handle=? "
+            "ORDER BY ts DESC LIMIT 1", (str(handle),)).fetchone()
+    return {"followers": r[0], "posts_7d": r[1], "avg_engagement": r[2], "ts": r[3]} if r else None
+
+
 def rival_due_for_collect(min_age_s):
     """کهنه‌ترین رقیب برای جمع‌آوریِ چرخشی/آهسته (بیش از min_age_s از آخرین جمع‌آوری گذشته) یا None."""
     with _lock:

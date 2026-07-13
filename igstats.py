@@ -77,6 +77,19 @@ def _get_sync(path, params=None):
     return r.json()
 
 
+def _get_soft(path, params=None):
+    """مثلِ _get_sync ولی بدنهٔ JSON را حتی روی 503 برمی‌گرداند (تا rate_limited/private معنایی خوانده شود)."""
+    p = dict(params or {})
+    if config.IG_DASH_TOKEN:
+        p["token"] = config.IG_DASH_TOKEN
+    r = requests.get(f"{config.IG_DASH_URL}{path}", params=p, timeout=_TIMEOUT)
+    try:
+        return r.json()
+    except Exception:  # noqa: BLE001 — بدونِ JSON: خطای واقعی
+        r.raise_for_status()
+        raise
+
+
 def _all_sync(media_limit=50):
     d = _get_sync("/api/analytics/all", {"media_limit": media_limit})  # کش‌شده، بدونِ force
     if not isinstance(d, dict) or not d.get("ok"):
@@ -450,9 +463,9 @@ async def competitor(handle: str) -> dict:
     if not enabled():
         return {"ok": False, "error": "disabled"}
     try:
-        d = await asyncio.to_thread(_get_sync, "/api/analytics/competitor", {"username": handle})
+        d = await asyncio.to_thread(_get_soft, "/api/analytics/competitor", {"username": handle})
         if not isinstance(d, dict) or not d.get("ok"):
-            return {"ok": False, "error": "unavailable"}
+            return {"ok": False, "error": (d or {}).get("error", "unavailable")}
         return {"ok": True, "data": d.get("data") or {}}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "error": type(e).__name__}
@@ -489,22 +502,40 @@ async def collect_rival(handle: str):
 
 
 async def maybe_collect_rival():
-    """جمع‌آوریِ چرخشیِ آهسته: هر بار فقط «کهنه‌ترین» رقیب (حداکثر ~روزی یک‌بار در هر رقیب)."""
-    if not enabled():
+    """جمع‌آوریِ چرخشیِ آهسته: هر بار فقط «کهنه‌ترین» رقیب (حداکثر ~روزی یک‌بار در هر رقیب).
+
+    اگر سرویس rate_limited داد، خودمان چند ساعت مکث می‌کنیم (به backoffِ سرویس احترام می‌گذاریم).
+    """
+    if not enabled() or _t_now() < float(db.get_meta("rival_pause_until") or 0):
         return
     h = db.rival_due_for_collect(_RIVAL_MIN_AGE)
-    if h:
-        await collect_rival(h)
+    if not h:
+        return
+    c = await competitor(h)
+    if c.get("ok"):
+        m = _analyze_rival(c["data"])
+        if m.get("followers"):
+            db.rival_snap_add(h, m["followers"], m["posts_7d"], m["avg_eng"])
+    elif c.get("error") == "rate_limited":
+        db.set_meta("rival_pause_until", str(_t_now() + 3 * 3600))
 
 
 async def rivals_report() -> dict:
-    """بنچمارکِ همهٔ رقبا نسبت به پیجِ خودمان (از دادهٔ کش‌شده). خروجی برای فرمت و برای تقویمِ محتوایی."""
+    """بنچمارکِ همهٔ رقبا نسبت به پیجِ خودمان (کشِ زنده وقتی مجاز، وگرنه از آخرین اسنپ‌شاتِ ذخیره‌شده)."""
     hs = db.rivals()
     mine = await summary()
+    paused = _t_now() < float(db.get_meta("rival_pause_until") or 0)
     out = {"mine": mine if mine.get("ok") else None, "rivals": [], "collected": 0}
     for h in hs:
-        m = await collect_rival(h)
-        if m:
+        m = None if paused else await collect_rival(h)
+        if not m:  # backoff یا هنوز جمع نشده → آخرین اسنپ‌شات
+            s = db.rival_last_snap(h)
+            if s and s.get("followers"):
+                g = db.rival_followers_ago(h, 7 * 86400)
+                m = {"handle": h, "ok": True, "followers": s["followers"], "posts_7d": s["posts_7d"],
+                     "avg_eng": s["avg_engagement"], "by_type": {}, "brand_coverage": {},
+                     "growth_7d": (s["followers"] - g) if g is not None else None, "from_snapshot": True}
+        if m and m.get("ok"):
             out["rivals"].append(m)
             out["collected"] += 1
         else:
