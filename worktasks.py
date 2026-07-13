@@ -316,8 +316,10 @@ def _edit_task(tid, new_text):
 
 
 def _add_report(user_id, name, text, kind="work", attendance=None) -> int:
-    day = clock.tehran_now().strftime("%Y-%m-%d")
     a = attendance or {}
+    # روزِ گزارش = تاریخی که کارمند در متن نوشته (work_date)، نه روزِ رسیدنِ پیام؛
+    # چون گزارش معمولاً برای «دیروز» است و صبحِ روزِ بعد فرستاده می‌شود.
+    day = a.get("work_date") or clock.tehran_now().strftime("%Y-%m-%d")
     with db._lock:
         cur = db._conn.execute(
             "INSERT INTO wt_reports(user_id, user_name, day, text, created_ts, kind, "
@@ -349,13 +351,20 @@ def _parse_attendance(text):
     if worked < 0:
         worked += 24 * 60  # شیفتِ گذر از نیمه‌شب (نادر)
     work_date = clock.tehran_now().strftime("%Y-%m-%d")  # پیش‌فرض: روزِ ثبت (اگر تاریخ در متن نبود)
-    dm = re.search(r"(1[34]\d{2})[/\-.](\d{1,2})[/\-.](\d{1,2})", t)
+    # تاریخِ شمسی را در هر دو ترتیب بشناس: «۱۴۰۵/۰۴/۲۱» (سال‌اول) و «۲۱/۴/۱۴۰۵» (روزاول). ماه همیشه وسط است.
+    dm = re.search(r"(\d{1,4})[/\-.](\d{1,2})[/\-.](\d{1,4})", t)
     if dm:
-        try:
-            work_date = jdatetime.date(int(dm.group(1)), int(dm.group(2)),
-                                       int(dm.group(3))).togregorian().strftime("%Y-%m-%d")
-        except Exception:  # noqa: BLE001 — تاریخِ نامعتبر → همان روزِ ثبت
-            pass
+        g1, mm, g3 = int(dm.group(1)), int(dm.group(2)), int(dm.group(3))
+        yy = dd = None
+        if 1300 <= g1 <= 1499:      # YYYY/MM/DD
+            yy, dd = g1, g3
+        elif 1300 <= g3 <= 1499:    # DD/MM/YYYY
+            yy, dd = g3, g1
+        if yy and 1 <= mm <= 12 and 1 <= dd <= 31:
+            try:
+                work_date = jdatetime.date(yy, mm, dd).togregorian().strftime("%Y-%m-%d")
+            except Exception:  # noqa: BLE001 — تاریخِ نامعتبر → همان روزِ ثبت
+                pass
     return {"work_date": work_date, "check_in": f"{h1:02d}:{m1:02d}",
             "check_out": f"{h2:02d}:{m2:02d}", "worked_min": worked}
 
@@ -901,6 +910,12 @@ async def on_group_message(update, context) -> bool:
         await _process_report(msg, user, body)
         return True
 
+    # گزارشِ بدونِ دکمه/پیشوند: اگر پیامِ یک کارمند فرمتِ حضوروغیاب (ساعتِ ورود–خروج) داشته باشد،
+    # همان را گزارشِ روزانه بگیر — مقاوم به ری‌استارت یا فراموشیِ دکمهٔ «ثبتِ گزارش».
+    if not _is_admin(user.id) and _parse_attendance(text):
+        await _process_report(msg, user, text)
+        return True
+
     # ثبتِ تسک: فقط مدیر، با منشن
     if not _is_admin(user.id):
         return False
@@ -1140,34 +1155,46 @@ def _team_status_text() -> str:
     return "\n".join(lines)
 
 
+# دو نوبتِ یادآوریِ گزارش (به‌وقتِ تهران): ۲۱:۰۰ و ۲۳:۳۰ — هر کدام گاردِ روزانه‌ی خودش.
+_REPORT_NUDGE_SLOTS = [(21 * 60, "last_nudge_2100"), (23 * 60 + 30, "last_nudge_2330")]
+
+
 async def maybe_report_reminder(app):
-    """پایانِ شیفت (یک‌بار در روز): به پرسنلی که امروز گزارش نداده‌اند در گروه یادآوری کن (با دکمه)."""
+    """دو نوبت (۲۱:۰۰ و ۲۳:۳۰): به پرسنلی که هنوز گزارشِ امروز را نداده‌اند در گروهِ کار با منشن یادآوری کن.
+
+    «امروز» = روزِ کاری‌ای که هنوز جمع نشده؛ چون گزارشِ هر روز معمولاً همان شب/شبِ بعد می‌آید.
+    """
     import poller  # واردسازیِ تنبل (پرهیز از حلقه)
     now = clock.tehran_now()
-    end = poller._shift_end_min(now)
-    if end is None or (now.hour * 60 + now.minute) < end:  # تعطیل یا پیش از پایانِ شیفت
+    if poller._shift_end_min(now) is None:  # جمعه → بی‌خبر
         return
     today = now.strftime("%Y-%m-%d")
     if _is_holiday(today):  # تعطیلِ عمومیِ اعلام‌شده → یادآوری نکن
         return
-    if db.get_meta("last_report_reminder") == today:
+    nowmin = now.hour * 60 + now.minute
+    due = [key for mn, key in _REPORT_NUDGE_SLOTS if nowmin >= mn and db.get_meta(key) != today]
+    if not due:  # هنوز به هیچ نوبتی نرسیده‌ایم یا همه مصرف شده‌اند
         return
     group = _workgroup()
     if not group:
         return
-    db.set_meta("last_report_reminder", today)
     missing = workers_without_report(today)
-    if not missing:
+    if not missing:  # همه دادند → نوبت‌های سررسیدشده را بی‌ارسال «مصرف‌شده» علامت بزن
+        for key in due:
+            db.set_meta(key, today)
         return
     mentions = " ".join(f'<a href="tg://user?id={uid}">{html.escape(name)}</a>' for uid, name in missing)
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("📝 ثبتِ گزارش", callback_data="wt:report")]])
     try:
         await app.bot.send_message(
             group,
-            "🌸 <b>یادآوریِ مهربانانهٔ گزارشِ امروز</b>\nمی‌دونم امروز حسابی زحمت کشیدید 💚 "
-            "این عزیزان فقط گزارششون مونده — هر وقت فرصت کردی چند خط برامون بنویس تا زحماتت دیده بشه 👇\n" + mentions,
+            "🌸 <b>یادآوریِ گزارش</b>\nمی‌دونم حسابی زحمت کشیدید 💚 "
+            "این عزیزان فقط گزارششون مونده — هر وقت فرصت کردی چند خط با تاریخ و ساعتِ ورود–خروج برامون بنویس "
+            "تا زحماتت کامل دیده بشه 👇\n" + mentions,
             parse_mode=ParseMode.HTML, reply_markup=kb)
-        print(f"[worktasks] یادآوریِ گزارش به {len(missing)} نفر ارسال شد.")
+        for key in due:  # فقط پس از ارسالِ موفق مصرف‌شده کن (وگرنه نوبتِ بعد دوباره تلاش می‌کند)
+            db.set_meta(key, today)
+        print(f"[worktasks] یادآوریِ گزارش به {len(missing)} نفر ارسال شد ({'،'.join(due)}).")
     except Exception as e:
         print(f"[worktasks] یادآوری ناموفق: {e!r}")
 
@@ -1257,15 +1284,15 @@ def monthly_trend_text(month) -> str:
     return "\n".join(lines)
 
 
-_PERF_GRACE_MIN = 180  # مهلت پس از پایانِ شیفت؛ اگر تا این‌جا همه گزارش ندادند، کارت با علامتِ نداده‌ها می‌رود
+_PERF_FALLBACK_MIN = 23 * 60 + 50  # ۲۳:۵۰ — پس از آخرین یادآوری (۲۳:۳۰)؛ اگر هنوز همه ندادند، کارت با علامتِ نداده‌ها می‌رود
 
 
 async def maybe_manager_report(app):
-    """گزارشِ عملکردِ روزانه به مدیران — فقط وقتی «همه گزارش دادند» (تا آن‌موقع صبر می‌کند).
+    """گزارشِ عملکردِ روزانه به پیویِ مدیران — فقط وقتی «همه گزارش دادند» (تا آن‌موقع صبر می‌کند).
 
-    فالبک: اگر تا ۳ ساعت پس از پایانِ شیفت هنوز همه گزارش نداده بودند، کارت (با علامتِ ❌ نداده‌ها)
-    فرستاده می‌شود تا مدیر بی‌خبر نماند. مسیرِ رویدادیِ maybe_send_perf_when_complete هم به‌محضِ
-    گزارشِ آخرین نفر کارتِ کامل را می‌فرستد.
+    فالبک: اگر تا ۲۳:۵۰ (پس از هر دو یادآوریِ ۲۱:۰۰ و ۲۳:۳۰) هنوز همه گزارش نداده بودند، کارت
+    (با علامتِ ❌ نداده‌ها) فرستاده می‌شود تا مدیر بی‌خبر نماند. مسیرِ رویدادیِ
+    maybe_send_perf_when_complete هم به‌محضِ گزارشِ آخرین نفر، کارتِ کامل را می‌فرستد.
     """
     import poller
     import telegram_io
@@ -1283,11 +1310,11 @@ async def maybe_manager_report(app):
     if not workers:
         return
     missing = workers_without_report(today)
-    if missing and nowmin < end + _PERF_GRACE_MIN:  # تا همه گزارش ندهند (یا مهلت نگذرد) نفرست
+    if missing and nowmin < _PERF_FALLBACK_MIN:  # تا همه گزارش ندهند صبر کن (یادآوریِ ۲۱:۰۰ و ۲۳:۳۰ نهیب می‌زند)
         return
-    db.set_meta("last_perf_report", today)
     try:
         await telegram_io.send_to_managers(app, daily_perf_text(today), parse_mode="HTML")
+        db.set_meta("last_perf_report", today)  # فقط پس از ارسالِ موفق (وگرنه دوباره تلاش می‌شود)
         tag = "کامل (همه گزارش دادند)" if not missing else f"با {len(missing)} نفرِ گزارش‌نداده (مهلت گذشت)"
         print(f"[worktasks] گزارشِ عملکردِ روزانه به مدیران ارسال شد — {tag}.")
     except Exception as e:
@@ -1318,9 +1345,9 @@ async def maybe_send_perf_when_complete(bot):
     workers, _r, _o = _workers_and_reports(today)
     if not workers or workers_without_report(today):  # هنوز همه گزارش نداده‌اند
         return
-    db.set_meta("last_perf_report", today)
     try:
         await _send_managers(bot, daily_perf_text(today))
+        db.set_meta("last_perf_report", today)  # فقط پس از ارسالِ موفق
         print("[worktasks] همه گزارش دادند → کارتِ عملکرد به مدیران ارسال شد.")
     except Exception as e:  # noqa: BLE001
         print(f"[worktasks] گزارشِ عملکردِ رویدادی ناموفق: {e!r}")
