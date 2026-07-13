@@ -435,3 +435,121 @@ async def cmd_igreport(update, context):
         return
     r = await summary()
     await msg.reply_text(format_report(r), parse_mode=ParseMode.HTML)
+
+
+# ---------- رقبا (آنالیزِ دادهٔ عمومیِ رقبا از API فقط‌خواندنی؛ بنچمارک + ایده) ----------
+_RIVAL_MIN_AGE = 20 * 3600  # هر رقیب حداکثر ~روزی یک‌بار (جمع‌آوریِ آهسته/انسانی سمتِ سرویسِ صاحبِ سشن)
+
+
+async def competitor(handle: str) -> dict:
+    """دادهٔ عمومیِ یک رقیب از اندپوینتِ /api/analytics/competitor (اگر سرویسِ صاحبِ سشن فعالش کرده باشد).
+
+    این بات هرگز خودش تماسِ مستقیمِ اینستاگرام نمی‌زند؛ فقط از API محلی می‌خواند. fail-soft: تا فعال‌شدنِ
+    اندپوینت، ok=False برمی‌گردد.
+    """
+    if not enabled():
+        return {"ok": False, "error": "disabled"}
+    try:
+        d = await asyncio.to_thread(_get_sync, "/api/analytics/competitor", {"username": handle})
+        if not isinstance(d, dict) or not d.get("ok"):
+            return {"ok": False, "error": "unavailable"}
+        return {"ok": True, "data": d.get("data") or {}}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": type(e).__name__}
+
+
+def _analyze_rival(d: dict) -> dict:
+    items = d.get("recent_media") or d.get("items") or []
+    engs = []
+    for it in items:
+        e = it.get("engagement")
+        engs.append(int((e if e is not None else (it.get("likes") or 0) + (it.get("comments") or 0)) or 0))
+    ana = _analyze_media(items)
+    return {"followers": d.get("followers") or 0, "following": d.get("following"),
+            "media_count": d.get("media_count"), "posts_7d": ana.get("posts_7d", 0),
+            "avg_eng": _avg(engs), "by_type": ana.get("by_type") or {},
+            "best_hour": ana.get("best_hour"), "brand_coverage": ana.get("brand_coverage") or {},
+            "avg_hashtags": ana.get("avg_hashtags"), "top_post": ana.get("top_post"),
+            "recent_captions": ana.get("recent_captions") or []}
+
+
+async def collect_rival(handle: str):
+    """یک رقیب را می‌گیرد، آنالیز و اسنپ‌شاتِ رشدش را ذخیره می‌کند. None اگر در دسترس نبود."""
+    c = await competitor(handle)
+    if not c.get("ok"):
+        return None
+    m = _analyze_rival(c["data"])
+    if m["followers"]:
+        db.rival_snap_add(handle, m["followers"], m["posts_7d"], m["avg_eng"])
+    g = db.rival_followers_ago(handle, 7 * 86400)
+    m["growth_7d"] = (m["followers"] - g) if (m["followers"] and g is not None) else None
+    m["handle"] = handle
+    m["ok"] = True
+    return m
+
+
+async def maybe_collect_rival():
+    """جمع‌آوریِ چرخشیِ آهسته: هر بار فقط «کهنه‌ترین» رقیب (حداکثر ~روزی یک‌بار در هر رقیب)."""
+    if not enabled():
+        return
+    h = db.rival_due_for_collect(_RIVAL_MIN_AGE)
+    if h:
+        await collect_rival(h)
+
+
+async def rivals_report() -> dict:
+    """بنچمارکِ همهٔ رقبا نسبت به پیجِ خودمان (از دادهٔ کش‌شده). خروجی برای فرمت و برای تقویمِ محتوایی."""
+    hs = db.rivals()
+    mine = await summary()
+    out = {"mine": mine if mine.get("ok") else None, "rivals": [], "collected": 0}
+    for h in hs:
+        m = await collect_rival(h)
+        if m:
+            out["rivals"].append(m)
+            out["collected"] += 1
+        else:
+            out["rivals"].append({"handle": h, "ok": False})
+    return out
+
+
+def format_rivals(rep: dict) -> str:
+    rivals_all = rep.get("rivals") or []
+    if not rivals_all:
+        return "🏁 هنوز رقیبی اضافه نشده. با <code>/rivals add آیدی</code> اضافه کن."
+    L = ["🏁 <b>بنچمارکِ رقبا</b>", ""]
+    mine = rep.get("mine")
+    if mine:
+        L += [f"⭐ <b>ما</b> @{mine.get('username', '')}: فالوور {_fa(mine.get('followers', 0))} · "
+              f"پستِ۷روز {_fa(mine.get('posts_7d', 0))} · تعامل {_fa(mine.get('avg_engagement', 0))}", ""]
+    ok = sorted([r for r in rivals_all if r.get("ok")], key=lambda r: -(r.get("followers") or 0))
+    for r in ok:
+        g = r.get("growth_7d")
+        gt = f" · رشدِ۷روز {_dd(g)}" if g is not None else ""
+        bt = ""
+        if r.get("by_type"):
+            best = max(r["by_type"].items(), key=lambda kv: kv[1]["avg_eng"])
+            bt = f" · قوی‌ترین‌نوع {_TYPE.get(best[0], best[0])}"
+        L.append(f"• <b>@{r['handle']}</b>: فالوور {_fa(r.get('followers', 0))} · "
+                 f"پستِ۷روز {_fa(r.get('posts_7d', 0))} · تعامل {_fa(r.get('avg_eng', 0))}{gt}{bt}")
+    pend = [r["handle"] for r in rivals_all if not r.get("ok")]
+    if pend:
+        L += ["", f"⏳ هنوز جمع‌آوری‌نشده ({_fa(len(pend))}): " + "، ".join("@" + h for h in pend[:12]),
+              "<i>پس از فعال‌شدنِ اندپوینتِ رقبا در سرویسِ اینستاگرام، خودکار پر می‌شود.</i>"]
+    return "\n".join(L)
+
+
+def rivals_brief(rep: dict) -> str:
+    """خلاصهٔ فشردهٔ رقبا برای خوراکِ مدیرِ محتوایی (جلوزدن از رقبا)."""
+    ok = [r for r in (rep.get("rivals") or []) if r.get("ok")]
+    if not ok:
+        return ""
+    parts = []
+    for r in sorted(ok, key=lambda r: -(r.get("avg_eng") or 0))[:6]:
+        bt = ""
+        if r.get("by_type"):
+            best = max(r["by_type"].items(), key=lambda kv: kv[1]["avg_eng"])
+            bt = f"، قوی‌ترین‌نوع={best[0]}"
+        bc = "،".join(list((r.get("brand_coverage") or {}).keys())[:4])
+        parts.append(f"@{r['handle']}: فالوور {r.get('followers')}، پستِ۷روز {r.get('posts_7d')}، "
+                     f"تعامل {r.get('avg_eng')}{bt}، برندها[{bc}]")
+    return "؛ ".join(parts)

@@ -288,7 +288,7 @@ async def route_issues(issues: list, staff: list) -> list:
         return []
 
 
-async def ig_content_plan(a: dict, inventory: dict | None = None) -> dict:
+async def ig_content_plan(a: dict, inventory: dict | None = None, rivals: str = "") -> dict:
     """مدیرِ محتوا/آنالیزورِ ارشدِ مسلط به ساعت: از آنالیزِ واقعیِ پیج + موجودیِ واقعیِ فروشگاه، تقویمِ ۷روزه
     + planِ پوششِ برند/رفرنس + تسک می‌سازد (موتورِ استدلالیِ کامل).
 
@@ -318,6 +318,8 @@ async def ig_content_plan(a: dict, inventory: dict | None = None) -> dict:
         "۲) planِ پوششِ برند/رفرنس بر اساسِ «موجودیِ واقعیِ فروشگاه»: کدام برند/مدل‌های موجود کم‌دیده شده‌اند و باید "
         "بیشتر بیایند تا همهٔ رفرنس‌های موجود در طولِ زمان پوشش داده شوند. فقط مدل‌های واقعاً موجود؛ برندِ من‌درآوردی نساز.\n"
         "۳) ۳ تا ۵ تسکِ مشخص، فعل‌محور و عملیِ همین‌هفته برای تیمِ اینستاگرام.\n"
+        "۴) اگر دادهٔ «رقبا» داده شد: نقاطِ قوتشان را متمایزتر و بهتر اجرا کن و شکافِ محتوایی/برندی را پر کن تا از "
+        "آن‌ها جلو بزنیم (کپی نکن؛ برتری بساز). این را در تقویم و تسک‌ها لحاظ کن.\n"
         "لحن: حرفه‌ای، دقیق و دلگرم‌کننده. فقط و فقط یک JSON با این کلیدها، بدونِ متنِ اضافه:\n"
         "{\"summary\":\"...\",\"calendar\":[{\"day\":\"...\",\"type\":\"...\",\"brand\":\"...\",\"time\":\"...\",\"story\":\"...\"}],"
         "\"brand_plan\":[\"...\"],\"tasks\":[\"...\"]}"
@@ -328,6 +330,7 @@ async def ig_content_plan(a: dict, inventory: dict | None = None) -> dict:
         f"بهترین ساعتِ انتشار: {bh.get('hour', '؟')} · بهترین روز: {bw.get('name', '؟')}\n"
         f"روندِ تعامل: {a.get('eng_trend_pct')}٪ · پستِ ۷روز: {a.get('posts_7d')} · نرخِ تعامل: {a.get('engagement_rate')}%\n"
         f"پوششِ برندِ اخیر (تعداد): {bc}\nنمونهٔ کپشن‌های اخیر:\n- " + "\n- ".join(caps[:8]) + inv_line
+        + (f"\n\nرقبا (برای جلوزدن، نه کپی):\n{rivals}" if rivals else "")
     )
     try:
         raw = (await _chat(system, user, 7000, effort="high")).strip()  # موتورِ ۵.۵ با استدلالِ کامل

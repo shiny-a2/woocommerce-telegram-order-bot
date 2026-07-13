@@ -96,6 +96,7 @@ _COMMANDS = [
     BotCommand("directives", "دستورهای دائمی مدیر"),
     BotCommand("igreport", "آنالیز پیج اینستاگرام (مدیر)"),
     BotCommand("igplan", "برنامه و تقویم محتوایی اینستاگرام (مدیر)"),
+    BotCommand("rivals", "بنچمارک و مدیریت رقبای اینستاگرام (مدیر/ادمین اینستا)"),
     BotCommand("setigadmin", "تعیین ادمین اینستاگرام (مدیر)"),
     BotCommand("linkwp", "لینک پرسنل به کاربر وردپرس (مدیر)"),
     BotCommand("setworkgroup", "ثبت این گروه به‌عنوان گروه کار (مدیر)"),

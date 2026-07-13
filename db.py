@@ -92,6 +92,23 @@ def init():
             avg_engagement_rate  REAL
         )"""
     )
+    _conn.execute(
+        """CREATE TABLE IF NOT EXISTS ig_rivals (
+            handle     TEXT PRIMARY KEY,
+            added_by   INTEGER,
+            added_name TEXT,
+            ts         REAL
+        )"""
+    )
+    _conn.execute(
+        """CREATE TABLE IF NOT EXISTS ig_rival_snap (
+            handle          TEXT,
+            ts              REAL,
+            followers       INTEGER,
+            posts_7d        INTEGER,
+            avg_engagement  REAL
+        )"""
+    )
     _conn.commit()
 
 
@@ -222,6 +239,54 @@ def ig_followers_ago(seconds):
             (time.time() - seconds,),
         ).fetchone()
         return r[0] if r else None
+
+
+# ---------- رقبای اینستاگرام (لیست + اسنپ‌شاتِ رشد برای آنالیز/بنچمارک) ----------
+def rival_add(handle, uid, name) -> bool:
+    with _lock:
+        cur = _conn.execute("INSERT OR IGNORE INTO ig_rivals(handle, added_by, added_name, ts) VALUES(?,?,?,?)",
+                            (str(handle), uid, name, time.time()))
+        _conn.commit()
+        return cur.rowcount > 0
+
+
+def rival_remove(handle) -> bool:
+    with _lock:
+        cur = _conn.execute("DELETE FROM ig_rivals WHERE handle=?", (str(handle),))
+        _conn.commit()
+        return cur.rowcount > 0
+
+
+def rivals() -> list:
+    with _lock:
+        return [r[0] for r in _conn.execute("SELECT handle FROM ig_rivals ORDER BY handle").fetchall()]
+
+
+def rival_snap_add(handle, followers, posts_7d, avg_eng):
+    with _lock:
+        _conn.execute("INSERT INTO ig_rival_snap(handle, ts, followers, posts_7d, avg_engagement) VALUES(?,?,?,?,?)",
+                      (str(handle), time.time(), int(followers or 0), int(posts_7d or 0), avg_eng))
+        _conn.commit()
+
+
+def rival_followers_ago(handle, seconds):
+    with _lock:
+        r = _conn.execute(
+            "SELECT followers FROM ig_rival_snap WHERE handle=? AND ts<=? ORDER BY ts DESC LIMIT 1",
+            (str(handle), time.time() - seconds)).fetchone()
+        return r[0] if r else None
+
+
+def rival_due_for_collect(min_age_s):
+    """کهنه‌ترین رقیب برای جمع‌آوریِ چرخشی/آهسته (بیش از min_age_s از آخرین جمع‌آوری گذشته) یا None."""
+    with _lock:
+        row = _conn.execute(
+            "SELECT r.handle, COALESCE(MAX(s.ts),0) AS last FROM ig_rivals r "
+            "LEFT JOIN ig_rival_snap s ON s.handle=r.handle GROUP BY r.handle ORDER BY last ASC LIMIT 1"
+        ).fetchone()
+    if row and (time.time() - (row[1] or 0)) >= min_age_s:
+        return row[0]
+    return None
 
 
 def count_orders() -> int:

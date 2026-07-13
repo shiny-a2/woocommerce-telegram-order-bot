@@ -1717,7 +1717,8 @@ async def cmd_igplan(update, context):
         await wait.edit_text("آنالیزِ اینستاگرام در دسترس نیست؛ کمی بعد دوباره امتحان کن.")
         return
     inventory = await igstats.instock_by_brand(100)  # مدل‌های موجودِ سایت برای پوششِ رفرنس‌ها
-    plan = await wt_brain.ig_content_plan(r, inventory)
+    rivals_brief = igstats.rivals_brief(await igstats.rivals_report()) if db.rivals() else ""  # برای جلوزدن از رقبا
+    plan = await wt_brain.ig_content_plan(r, inventory, rivals_brief)
     if not plan or not (plan.get("calendar") or plan.get("tasks")):
         await wait.edit_text("ساختِ برنامه فعلاً ممکن نشد (مغزِ AI پاسخ نداد). کمی بعد دوباره بزن.")
         return
@@ -1731,6 +1732,49 @@ async def cmd_igplan(update, context):
             _add_task(ig_uid, ig_name, user.id, "🤖 مدیرِ محتوا", t)
             made += 1
     await wait.edit_text(_igplan_text(plan, made), parse_mode=ParseMode.HTML)
+
+
+def _norm_handle(s):
+    h = (s or "").strip().strip("@").strip("/").lower()
+    if "instagram.com/" in h:
+        h = h.split("instagram.com/")[-1].split("/")[0].split("?")[0]
+    return h.strip().strip("@")
+
+
+async def cmd_rivals(update, context):
+    """مدیریت و بنچمارکِ رقبای اینستاگرام (مدیر یا ادمینِ اینستاگرام).
+
+    /rivals            → بنچمارکِ رقبا
+    /rivals add id ... → افزودن   ·   /rivals rm id → حذف   ·   /rivals list → فهرست
+    """
+    msg = update.effective_message
+    user = update.effective_user
+    if not msg or not user or not (_is_admin(user.id) or user.id == _ig_admin_uid()):
+        return
+    args = context.args or []
+    op = args[0].lower() if args else ""
+    if op in ("add", "اضافه", "+"):
+        handles = [h for h in (_norm_handle(x) for x in args[1:]) if h]
+        added = sum(1 for h in handles if db.rival_add(h, user.id, user.full_name))
+        hs = db.rivals()
+        await msg.reply_text(f"✅ {_fa(added)} رقیب اضافه شد. کلِ رقبا ({_fa(len(hs))}):\n"
+                             + "، ".join("@" + h for h in hs))
+        return
+    if op in ("rm", "remove", "del", "حذف", "-"):
+        rmd = sum(1 for x in args[1:] if db.rival_remove(_norm_handle(x)))
+        await msg.reply_text(f"🗑️ {_fa(rmd)} رقیب حذف شد. باقی‌مانده: {_fa(len(db.rivals()))}")
+        return
+    if op in ("list", "لیست"):
+        hs = db.rivals()
+        await msg.reply_text(f"🏁 رقبا ({_fa(len(hs))}):\n" + ("، ".join("@" + h for h in hs) or "—"))
+        return
+    if not db.rivals():
+        await msg.reply_text("هنوز رقیبی اضافه نشده. آیدیِ پیجِ رقبا را بده؛ مثال:\n"
+                             "<code>/rivals add page_one page_two</code>", parse_mode=ParseMode.HTML)
+        return
+    wait = await msg.reply_text("🏁 در حال آماده‌سازیِ بنچمارکِ رقبا…")
+    rep = await igstats.rivals_report()
+    await wait.edit_text(igstats.format_rivals(rep), parse_mode=ParseMode.HTML)
 
 
 async def cmd_setigadmin(update, context):

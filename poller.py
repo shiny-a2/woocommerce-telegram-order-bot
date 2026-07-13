@@ -394,6 +394,9 @@ async def run(app):
             if cycle % 60 == 0:  # ~ساعتی یک‌بار: اسنپ‌شاتِ آمارِ اینستاگرام (کش‌شده) برای تاریخچهٔ رشد
                 import igstats
                 await igstats.maybe_snapshot()
+            if cycle % 10 == 0:  # ~هر ۱۰ دقیقه: جمع‌آوریِ چرخشیِ آهستهٔ یک رقیب (هر رقیب ≤ روزی یک‌بار)
+                import igstats
+                await igstats.maybe_collect_rival()
             if cycle % 5 == 0:  # هر ~۵ دقیقه
                 await _maybe_due_reminders(app)
             await reports.prewarm()  # کش را گرم نگه دار → گزارش‌های ادمین آنی

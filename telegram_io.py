@@ -1471,6 +1471,7 @@ def register_handlers(app: Application):
     app.add_handler(CommandHandler("hours", worktasks.cmd_hours))
     app.add_handler(CommandHandler("igreport", igstats.cmd_igreport))
     app.add_handler(CommandHandler("igplan", worktasks.cmd_igplan))
+    app.add_handler(CommandHandler("rivals", worktasks.cmd_rivals))
     app.add_handler(CommandHandler("setigadmin", worktasks.cmd_setigadmin))
     app.add_handler(CommandHandler("linkwp", worktasks.cmd_linkwp))
     app.add_handler(CommandHandler("directives", worktasks.cmd_directives))
