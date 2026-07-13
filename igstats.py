@@ -353,7 +353,7 @@ async def instock_by_brand(sample=400) -> dict:
         try:
             items = await woo.get("products", {
                 "stock_status": "instock", "status": "publish", "per_page": per, "page": page,
-                "orderby": "date", "order": "desc", "_fields": "id,name,sku,stock_quantity"})
+                "orderby": "date", "order": "desc", "_fields": "id,name,stock_quantity"})
         except Exception as e:  # noqa: BLE001
             print(f"[igstats] instock fetch p{page}: {e!r}")
             break
@@ -367,8 +367,7 @@ async def instock_by_brand(sample=400) -> dict:
             for b in _detect_brands(name):
                 by[b]["count"] += 1
                 if len(by[b]["examples"]) < 5:
-                    sku = p.get("sku")
-                    by[b]["examples"].append(name[:42] + (f" [{sku}]" if sku else ""))
+                    by[b]["examples"].append(name[:55])  # فقط نامِ محصول (رفرنس در نام هست)؛ بدونِ SKU
         got += 1
         await asyncio.sleep(0.4)  # ملایم بینِ صفحه‌ها (ضدبلاک)
     db.set_meta("ig_inv_page", str(((start - 1 + got) % max_page) + 1))  # چرخش برای پوششِ بقیهٔ کاتالوگ

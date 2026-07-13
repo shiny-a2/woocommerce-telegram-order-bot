@@ -1699,19 +1699,48 @@ def _days_until_friday(now):
     return out
 
 
+def _clean_model(s) -> str:
+    """SKU/هشِ داخلِ [] را از نامِ محصول حذف می‌کند (فقط نامِ نمایشیِ تمیز بماند)."""
+    import re
+    return re.sub(r"\s*[\[\(][0-9a-zA-Z._-]{5,}[\]\)]", "", str(s or "")).strip()
+
+
+def _flat(v) -> str:
+    """اگر مقدار لیست بود، با فاصله به‌هم می‌چسبد — تا repr پایتونی در متن دیده نشود."""
+    if isinstance(v, (list, tuple)):
+        return " ".join(str(x).strip() for x in v if str(x).strip())
+    return str(v or "").strip()
+
+
+def _story_lines(s) -> list:
+    """استوری‌ها را به خطوطِ جداگانه و تمیز می‌شکند — چه لیست باشد، چه رشتهٔ «۱) … ۲) …» (بدونِ SKU)."""
+    import re
+    _num = re.compile(r"^\s*[۰-۹\d]{1,2}\s*[)\-.]\s*")  # پیشوندِ شماره‌گذاری (چون خودمان بولت می‌گذاریم)
+    if isinstance(s, (list, tuple)):
+        parts = [str(x) for x in s if str(x).strip()]
+    else:
+        # فقط ابتدای هر عدد را مرزِ شکست بگیر (lookbehind منفی تا وسطِ عددِ دورقمی نشکند)
+        parts = [p.strip() for p in re.split(r"(?<![۰-۹\d])(?=[۰-۹\d]{1,2}[)\-.]\s)", str(s or "")) if p.strip()]
+        if not parts and s:
+            parts = [str(s)]
+    return [_clean_model(_num.sub("", p)).strip() for p in parts if _clean_model(_num.sub("", p)).strip()]
+
+
 def _day_task_text(d) -> str:
-    """یک روزِ تقویم → متنِ تسکِ روزانهٔ ریز و دقیق برای ادمینِ پیج (پست + ≥۱۰ استوریِ رفرنس‌دار)."""
-    L = [f"📅 {d.get('day', '')} — {d.get('type', '')}" + (f" · ساعت {d.get('time', '')}" if d.get("time") else "")]
+    """یک روزِ تقویم → متنِ تسکِ روزانهٔ تمیز و ایموجی‌دار (بدونِ SKU/تگِ HTML — امن برای هر نمایش)."""
+    L = [f"📅 {_flat(d.get('day'))} · 🎬 {_flat(d.get('type'))}" + (f" · ⏰ {_flat(d.get('time'))}" if d.get("time") else "")]
     if d.get("brand"):
-        L.append(f"🛍 محصول/رفرنس: {d.get('brand')}")
+        L.append(f"🛍 محصول: {_clean_model(_flat(d.get('brand')))}")
     if d.get("hook"):
-        L.append(f"🎣 قلابِ کپشن: {d.get('hook')}")
+        L.append(f"🎣 قلاب: {_flat(d.get('hook'))}")
     if d.get("audio"):
-        L.append(f"🎵 موزیک/صدا (ترند): {d.get('audio')}")
+        L.append(f"🎵 موزیک: {_flat(d.get('audio'))}")
     if d.get("hashtags"):
-        L.append(f"#️⃣ هشتگ‌ها: {d.get('hashtags')}")
-    if d.get("stories"):
-        L.append(f"📸 استوری‌های امروز (≥۱۰، با رفرنس): {d.get('stories')}")
+        L.append(f"🏷️ {_flat(d.get('hashtags'))}")
+    st = _story_lines(d.get("stories"))
+    if st:
+        L.append("📸 استوری‌ها:")
+        L += [f"   • {x}" for x in st]
     return "\n".join(str(x) for x in L).replace("<", "‹").replace(">", "›")
 
 
@@ -1750,30 +1779,46 @@ async def _reply_tasks(target, rows):
             pass
 
 
-def _igplan_text(plan, made) -> str:
-    L = ["📅 <b>برنامهٔ محتواییِ اینستاگرام</b> — مدیرِ متخصصِ ساعت", ""]
-    if plan.get("summary"):
-        L += [html.escape(plan["summary"]), ""]
-    for d in plan.get("calendar") or []:
-        line = (f"• <b>{html.escape(str(d.get('day', '')))}</b> — {html.escape(str(d.get('type', '')))}"
-                + (f" · {html.escape(str(d.get('brand', '')))}" if d.get("brand") else "")
-                + (f" · ⏰{html.escape(str(d.get('time', '')))}" if d.get("time") else ""))
-        if d.get("hook"):
-            line += f"\n   🎣 {html.escape(str(d.get('hook')))}"
-        if d.get("audio"):
-            line += f"\n   🎵 {html.escape(str(d.get('audio')))}"
-        if d.get("hashtags"):
-            line += f"\n   #️⃣ {html.escape(str(d.get('hashtags')))}"
-        if d.get("stories"):
-            line += f"\n   📸 استوری‌ها (≥۱۰): {html.escape(str(d.get('stories')))}"
-        L.append(line)
-    if plan.get("brand_plan"):
-        L += ["", "🏷️ <b>پوششِ برند:</b>"] + [f"• {html.escape(x)}" for x in plan["brand_plan"]]
-    if made:
-        L += ["", f"✅ {_fa(made)} تسکِ روزانه برای ادمینِ اینستاگرام ثبت شد (با /tasks می‌بیند)."]
-    elif not _ig_admin_uid():
-        L += ["", "<i>برای ثبتِ خودکارِ تسکِ روزانه، اول با /setigadmin ادمینِ پیج را مشخص کن.</i>"]
+def _day_card(d) -> str:
+    """کارتِ تمیز و ایموجی‌دارِ یک روز برای نمایش (HTML، بدونِ SKU)."""
+    head = f"📅 <b>{html.escape(_flat(d.get('day')))}</b>"
+    if d.get("type"):
+        head += f"  ·  🎬 {html.escape(_flat(d.get('type')))}"
+    if d.get("time"):
+        head += f"  ·  ⏰ {html.escape(_flat(d.get('time')))}"
+    L = [head]
+    mid = []
+    if d.get("brand"):
+        mid.append(f"🛍 <b>محصول:</b> {html.escape(_clean_model(_flat(d.get('brand'))))}")
+    if d.get("hook"):
+        mid.append(f"🎣 <b>قلاب:</b> {html.escape(_flat(d.get('hook')))}")
+    if d.get("audio"):
+        mid.append(f"🎵 <b>موزیک:</b> {html.escape(_flat(d.get('audio')))}")
+    if d.get("hashtags"):
+        mid.append(f"🏷️ {html.escape(_flat(d.get('hashtags')))}")
+    if mid:
+        L += [""] + mid
+    st = _story_lines(d.get("stories"))
+    if st:
+        L += ["", "📸 <b>استوری‌های امروز:</b>"] + [f"   • {html.escape(x)}" for x in st]
     return "\n".join(L)
+
+
+def _igplan_messages(plan, days, made) -> list:
+    """خروجیِ پلن به‌صورتِ چند پیام: پیامِ خلاصه + «هر روز یک پیامِ تمیز»."""
+    over = [f"📅 <b>برنامهٔ محتوایی</b> — از «{days[0] if days else 'شنبه'}» تا «جمعه»", ""]
+    if plan.get("summary"):
+        over += [html.escape(plan["summary"]), ""]
+    if plan.get("brand_plan"):
+        over += ["🏷️ <b>پوششِ برند:</b>"] + [f"• {html.escape(x)}" for x in plan["brand_plan"]]
+    if made:
+        over += ["", f"✅ {_fa(made)} تسکِ روزانه به ادمینِ پیج سپرده شد (با /tasks)."]
+    elif not _ig_admin_uid():
+        over += ["", "<i>برای ثبتِ خودکارِ تسکِ روزانه، اول با /setigadmin ادمینِ پیج را مشخص کن.</i>"]
+    msgs = ["\n".join(over)]
+    for d in plan.get("calendar") or []:
+        msgs += _chunk_html(_day_card(d))  # هر روز یک پیام (اگر خیلی بلند بود، همان روز تکه می‌شود)
+    return msgs
 
 
 async def cmd_igplan(update, context):
@@ -1789,14 +1834,17 @@ async def cmd_igplan(update, context):
     if not plan:
         await wait.edit_text("ساختِ برنامه فعلاً ممکن نشد (آنالیز/مغزِ AI پاسخ نداد). کمی بعد دوباره بزن.")
         return
-    chunks = _chunk_html(_igplan_text(plan, made))
+    msgs = _igplan_messages(plan, days, made)  # [۰]=خلاصه، سپس «هر روز یک پیامِ تمیز»
     try:
-        await wait.edit_text(chunks[0], parse_mode=ParseMode.HTML)
+        await wait.edit_text(msgs[0], parse_mode=ParseMode.HTML)
     except Exception:  # noqa: BLE001
         await wait.edit_text("✅ برنامهٔ محتوایی آماده شد 👇")
-        await msg.reply_text(chunks[0], parse_mode=ParseMode.HTML)
-    for ch in chunks[1:]:
-        await msg.reply_text(ch, parse_mode=ParseMode.HTML)
+        await msg.reply_text(msgs[0], parse_mode=ParseMode.HTML)
+    for ch in msgs[1:]:
+        try:
+            await msg.reply_text(ch, parse_mode=ParseMode.HTML)
+        except Exception:  # noqa: BLE001
+            pass
 
 
 async def _build_and_assign_igplan(actor_id, days):
@@ -1881,11 +1929,11 @@ async def maybe_ig_autoplan(app):
         return
     db.set_meta("last_ig_autoplan", wk)
     try:
-        plan, made = await _build_and_assign_igplan(0, _days_until_friday(now))  # شنبه → کلِ هفته
+        days = _days_until_friday(now)  # شنبه → کلِ هفته
+        plan, made = await _build_and_assign_igplan(0, days)
         if not plan:
             return
-        head = f"📅 <b>برنامهٔ محتواییِ هفته (خودکار)</b> — {_fa(made)} تسکِ روزانه به ادمینِ پیج سپرده شد.\n\n"
-        for ch in _chunk_html(head + _igplan_text(plan, made)):
+        for ch in _igplan_messages(plan, days, made):  # خلاصه + هر روز یک پیامِ تمیز
             await _send_managers(app.bot, ch)
         ig_uid = _ig_admin_uid()
         if ig_uid:
