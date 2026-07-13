@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime
+import re
 from collections import defaultdict
 
 import requests
@@ -44,12 +45,16 @@ _BRANDS = {
 }
 
 
+_BOUND = "0-9a-z؀-ۿ‌"  # حروف/ارقامِ لاتین+فارسی+ZWNJ (برای مرزِ واژه)
+
+
 def _detect_brands(caption: str) -> set:
-    c = " " + (caption or "").lower() + " "
+    """برندهای ساعت را با «مرزِ واژه» تشخیص می‌دهد تا زیررشته گیر نکند (مثلاً «گس» داخلِ «الگنگس»)."""
+    c = (caption or "").lower()
     found = set()
     for brand, aliases in _BRANDS.items():
         for a in aliases:
-            if a in c:
+            if re.search(rf"(?<![{_BOUND}]){re.escape(a)}(?![{_BOUND}])", c):
                 found.add(brand)
                 break
     return found
@@ -308,6 +313,30 @@ async def maybe_snapshot():
         await summary()
     except Exception:  # noqa: BLE001
         pass
+
+
+async def instock_by_brand(sample=100) -> dict:
+    """محصولاتِ موجودِ سایت (stock=instock) گروه‌بندی بر اساسِ برندِ تشخیص‌داده‌شده از نامِ محصول.
+
+    خروجی: {brand: {"count": n, "examples": [نام/رفرنس]}} — برای پوششِ رفرنس‌های واقعیِ قابلِ عکاسی در تقویم.
+    """
+    import woo
+    try:
+        items = await woo.get("products", {
+            "stock_status": "instock", "status": "publish", "per_page": min(int(sample), 100),
+            "orderby": "date", "order": "desc", "_fields": "id,name,sku"})
+    except Exception as e:  # noqa: BLE001
+        print(f"[igstats] instock fetch: {e!r}")
+        return {}
+    by = defaultdict(lambda: {"count": 0, "examples": []})
+    for p in (items or []):
+        name = (p.get("name") or "").strip()
+        for b in _detect_brands(name):
+            by[b]["count"] += 1
+            if len(by[b]["examples"]) < 4:
+                sku = p.get("sku")
+                by[b]["examples"].append(name[:42] + (f" [{sku}]" if sku else ""))
+    return dict(sorted(by.items(), key=lambda kv: -kv[1]["count"]))
 
 
 # ---------- برای ارزیابیِ ادمینِ اینستاگرام (خطِ فشردهٔ واقعیت‌ها) ----------

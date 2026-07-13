@@ -24,7 +24,7 @@ def _client_():
     return _client
 
 
-async def _chat(system: str, user: str, max_tokens: int) -> str:
+async def _chat(system: str, user: str, max_tokens: int, effort: str | None = None) -> str:
     m = config.WT_MODEL
     kwargs = {
         "model": m,
@@ -32,6 +32,8 @@ async def _chat(system: str, user: str, max_tokens: int) -> str:
     }
     if m.startswith(("gpt-5", "o1", "o3", "o4")):  # مدل‌های استدلالی: temperature نمی‌گیرند
         kwargs["max_completion_tokens"] = max_tokens
+        if effort:  # حالتِ «تینک»: بودجهٔ استدلالِ بیشتر برای خروجیِ کامل‌تر
+            kwargs["reasoning_effort"] = effort
     else:
         kwargs["temperature"] = 0.4
         kwargs["max_tokens"] = max_tokens
@@ -286,13 +288,21 @@ async def route_issues(issues: list, staff: list) -> list:
         return []
 
 
-async def ig_content_plan(a: dict) -> dict:
-    """مدیرِ محتوا/آنالیزورِ ارشدِ مسلط به ساعت: از آنالیزِ واقعیِ پیج، تقویمِ ۷روزه + planِ برند + تسک می‌سازد.
+async def ig_content_plan(a: dict, inventory: dict | None = None) -> dict:
+    """مدیرِ محتوا/آنالیزورِ ارشدِ مسلط به ساعت: از آنالیزِ واقعیِ پیج + موجودیِ واقعیِ فروشگاه، تقویمِ ۷روزه
+    + planِ پوششِ برند/رفرنس + تسک می‌سازد (موتورِ استدلالیِ کامل).
 
-    ورودی: خروجیِ igstats.summary(). خروجی: {summary, calendar[], brand_plan[], tasks[]}.
+    ورودی: a=igstats.summary()، inventory=igstats.instock_by_brand(). خروجی: {summary, calendar[], brand_plan[], tasks[]}.
     """
     if not enabled() or not a or not a.get("ok"):
         return {}
+    inv = inventory or {}
+    inv_line = ""
+    if inv:
+        inv_line = ("\nموجودیِ واقعیِ فروشگاه (فقط این مدل‌ها موجود و قابلِ عکاسی‌اند — از این‌ها برای پوششِ "
+                    "رفرنس‌ها انتخاب کن):\n" + "\n".join(
+                        f"- {b} ({v.get('count')} موجود): " + "؛ ".join(v.get("examples") or [])
+                        for b, v in list(inv.items())[:15]))
     byt = a.get("by_type") or {}
     type_line = "، ".join(f"{t}: میانگینِ تعامل {v.get('avg_eng')} ({v.get('count')} پست)"
                           for t, v in byt.items()) or "؟"
@@ -302,10 +312,11 @@ async def ig_content_plan(a: dict) -> dict:
         "تو «مدیرِ محتوا و آنالیزورِ ارشدِ اینستاگرام» و کاملاً مسلط به بازار و برندهای ساعت (مخاطبِ ایرانی، سبک‌ها، "
         "پوزیشنینگِ برندها و قیمت‌ها) هستی و برای یک گالریِ ساعتِ حرفه‌ای کار می‌کنی. بر اساسِ آنالیزِ واقعیِ پیج (که "
         "می‌دهم) یک برنامهٔ محتواییِ حرفه‌ای و داده‌محور بساز:\n"
-        "۱) تقویمِ ۷روزه (شنبه تا جمعه): برای هر روز نوعِ محتوا (پست/ریل/کاروسل/استوری)، برند یا تمِ ساعتِ پیشنهادی، "
-        "بهترین ساعتِ انتشار، و یک ایدهٔ استوری. از بهترین نوع/ساعت/روزِ واقعی استفاده کن.\n"
-        "۲) planِ پوششِ برند: از coverage و کپشن‌های اخیر بفهم کدام برندها کم‌دیده شده‌اند و باید بیشتر بیایند "
-        "(فقط برندهایی که واقعاً در پیج/فروشگاه هستند؛ برندِ من‌درآوردی نساز).\n"
+        "۱) تقویمِ ۷روزه (شنبه تا جمعه): برای هر روز نوعِ محتوا (پست/ریل/کاروسل/استوری)، بهترین ساعتِ انتشار، "
+        "یک ایدهٔ استوری، و در فیلدِ brand حتماً یک «مدلِ مشخصِ موجود» از فهرستِ موجودیِ فروشگاه (نام/رفرنس) بگذار "
+        "تا ادمین از خودِ محصولِ حاضر محتوا بسازد. از بهترین نوع/ساعت/روزِ واقعی استفاده کن.\n"
+        "۲) planِ پوششِ برند/رفرنس بر اساسِ «موجودیِ واقعیِ فروشگاه»: کدام برند/مدل‌های موجود کم‌دیده شده‌اند و باید "
+        "بیشتر بیایند تا همهٔ رفرنس‌های موجود در طولِ زمان پوشش داده شوند. فقط مدل‌های واقعاً موجود؛ برندِ من‌درآوردی نساز.\n"
         "۳) ۳ تا ۵ تسکِ مشخص، فعل‌محور و عملیِ همین‌هفته برای تیمِ اینستاگرام.\n"
         "لحن: حرفه‌ای، دقیق و دلگرم‌کننده. فقط و فقط یک JSON با این کلیدها، بدونِ متنِ اضافه:\n"
         "{\"summary\":\"...\",\"calendar\":[{\"day\":\"...\",\"type\":\"...\",\"brand\":\"...\",\"time\":\"...\",\"story\":\"...\"}],"
@@ -316,10 +327,10 @@ async def ig_content_plan(a: dict) -> dict:
         f"تعامل به‌تفکیکِ نوع: {type_line}\n"
         f"بهترین ساعتِ انتشار: {bh.get('hour', '؟')} · بهترین روز: {bw.get('name', '؟')}\n"
         f"روندِ تعامل: {a.get('eng_trend_pct')}٪ · پستِ ۷روز: {a.get('posts_7d')} · نرخِ تعامل: {a.get('engagement_rate')}%\n"
-        f"پوششِ برندِ اخیر (تعداد): {bc}\nنمونهٔ کپشن‌های اخیر:\n- " + "\n- ".join(caps[:8])
+        f"پوششِ برندِ اخیر (تعداد): {bc}\nنمونهٔ کپشن‌های اخیر:\n- " + "\n- ".join(caps[:8]) + inv_line
     )
     try:
-        raw = (await _chat(system, user, 3000)).strip()
+        raw = (await _chat(system, user, 7000, effort="high")).strip()  # موتورِ ۵.۵ با استدلالِ کامل
         if raw.startswith("```"):
             raw = raw.strip("`")
             if raw[:4].lower() == "json":

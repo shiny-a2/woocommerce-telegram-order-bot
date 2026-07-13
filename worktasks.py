@@ -1716,7 +1716,8 @@ async def cmd_igplan(update, context):
     if not r.get("ok"):
         await wait.edit_text("آنالیزِ اینستاگرام در دسترس نیست؛ کمی بعد دوباره امتحان کن.")
         return
-    plan = await wt_brain.ig_content_plan(r)
+    inventory = await igstats.instock_by_brand(100)  # مدل‌های موجودِ سایت برای پوششِ رفرنس‌ها
+    plan = await wt_brain.ig_content_plan(r, inventory)
     if not plan or not (plan.get("calendar") or plan.get("tasks")):
         await wait.edit_text("ساختِ برنامه فعلاً ممکن نشد (مغزِ AI پاسخ نداد). کمی بعد دوباره بزن.")
         return
