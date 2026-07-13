@@ -970,12 +970,13 @@ async def on_callback_hook(q, context) -> bool:
     if action == "tasks":  # «تسک‌های من»
         await _ans(q)
         rows = _open_tasks(uid)
-        body = _tasks_text(rows) if rows else "✅ آفرین! هیچ تسکِ بازی نداری، همه‌چیز به‌روزه 🎉"
-        try:
-            await q.message.reply_text(body, parse_mode=ParseMode.HTML,
-                                       reply_markup=_tasks_kb(rows) if rows else None)
-        except Exception:
-            pass
+        if rows:
+            await _reply_tasks(q.message, rows)
+        else:
+            try:
+                await q.message.reply_text("✅ آفرین! هیچ تسکِ بازی نداری، همه‌چیز به‌روزه 🎉")
+            except Exception:  # noqa: BLE001
+                pass
         return True
 
     if action == "report":  # «ثبتِ گزارش» → منتظرِ متنِ بعدی می‌شویم
@@ -1059,7 +1060,7 @@ async def cmd_tasks(update, context):
     if not rows:
         await msg.reply_text("✅ آفرین! هیچ تسکِ بازی نداری، همه‌چیز به‌روزه 🎉")
         return
-    await msg.reply_text(_tasks_text(rows), parse_mode=ParseMode.HTML, reply_markup=_tasks_kb(rows))
+    await _reply_tasks(msg, rows)
 
 
 async def cmd_report(update, context):
@@ -1705,6 +1706,8 @@ def _day_task_text(d) -> str:
         L.append(f"🛍 محصول/رفرنس: {d.get('brand')}")
     if d.get("hook"):
         L.append(f"🎣 قلابِ کپشن: {d.get('hook')}")
+    if d.get("audio"):
+        L.append(f"🎵 موزیک/صدا (ترند): {d.get('audio')}")
     if d.get("hashtags"):
         L.append(f"#️⃣ هشتگ‌ها: {d.get('hashtags')}")
     if d.get("stories"):
@@ -1736,6 +1739,17 @@ def _chunk_html(text, limit=3800):
     return chunks or [""]
 
 
+async def _reply_tasks(target, rows):
+    """لیستِ تسک‌ها را (در صورتِ بلندبودن — مثلِ پلنِ روزانه) چند‌تکه می‌فرستد؛ کیبوردِ «انجام شد» روی تکهٔ آخر."""
+    chunks = _chunk_html(_tasks_text(rows))
+    for i, ch in enumerate(chunks):
+        kb = _tasks_kb(rows) if i == len(chunks) - 1 else None
+        try:
+            await target.reply_text(ch, parse_mode=ParseMode.HTML, reply_markup=kb)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 def _igplan_text(plan, made) -> str:
     L = ["📅 <b>برنامهٔ محتواییِ اینستاگرام</b> — مدیرِ متخصصِ ساعت", ""]
     if plan.get("summary"):
@@ -1746,6 +1760,8 @@ def _igplan_text(plan, made) -> str:
                 + (f" · ⏰{html.escape(str(d.get('time', '')))}" if d.get("time") else ""))
         if d.get("hook"):
             line += f"\n   🎣 {html.escape(str(d.get('hook')))}"
+        if d.get("audio"):
+            line += f"\n   🎵 {html.escape(str(d.get('audio')))}"
         if d.get("hashtags"):
             line += f"\n   #️⃣ {html.escape(str(d.get('hashtags')))}"
         if d.get("stories"):
