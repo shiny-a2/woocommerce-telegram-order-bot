@@ -1683,6 +1683,20 @@ def _target_user(msg):
     return ms[0] if ms else None
 
 
+def _chunk_html(text, limit=3800):
+    """متنِ HTML را روی مرزِ خط به تکه‌های ≤limit تقسیم می‌کند (سقفِ ۴۰۹۶ تلگرام)."""
+    chunks, cur = [], ""
+    for line in (text or "").split("\n"):
+        if cur and len(cur) + len(line) + 1 > limit:
+            chunks.append(cur)
+            cur = line
+        else:
+            cur = (cur + "\n" + line) if cur else line
+    if cur:
+        chunks.append(cur)
+    return chunks or [""]
+
+
 def _igplan_text(plan, made) -> str:
     L = ["📅 <b>برنامهٔ محتواییِ اینستاگرام</b> — مدیرِ متخصصِ ساعت", ""]
     if plan.get("summary"):
@@ -1721,7 +1735,7 @@ async def cmd_igplan(update, context):
         await wait.edit_text("آنالیزِ اینستاگرام در دسترس نیست؛ کمی بعد دوباره امتحان کن.")
         return
     inventory = await igstats.instock_by_brand(100)  # مدل‌های موجودِ سایت برای پوششِ رفرنس‌ها
-    rivals_brief = igstats.rivals_brief(await igstats.rivals_report()) if db.rivals() else ""  # برای جلوزدن از رقبا
+    rivals_brief = igstats.rivals_brief_stored()  # از اسنپ‌شاتِ ذخیره‌شده (سریع، بدونِ فراخوانِ زنده)
     plan = await wt_brain.ig_content_plan(r, inventory, rivals_brief)
     if not plan or not (plan.get("calendar") or plan.get("tasks")):
         await wait.edit_text("ساختِ برنامه فعلاً ممکن نشد (مغزِ AI پاسخ نداد). کمی بعد دوباره بزن.")
@@ -1735,7 +1749,14 @@ async def cmd_igplan(update, context):
         for t in plan["tasks"][:5]:
             _add_task(ig_uid, ig_name, user.id, "🤖 مدیرِ محتوا", t)
             made += 1
-    await wait.edit_text(_igplan_text(plan, made), parse_mode=ParseMode.HTML)
+    chunks = _chunk_html(_igplan_text(plan, made))
+    try:
+        await wait.edit_text(chunks[0], parse_mode=ParseMode.HTML)
+    except Exception:  # noqa: BLE001
+        await wait.edit_text("✅ برنامهٔ محتوایی آماده شد 👇")
+        await msg.reply_text(chunks[0], parse_mode=ParseMode.HTML)
+    for ch in chunks[1:]:
+        await msg.reply_text(ch, parse_mode=ParseMode.HTML)
 
 
 def _norm_handle(s):

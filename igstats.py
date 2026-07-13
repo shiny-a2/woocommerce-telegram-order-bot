@@ -569,6 +569,16 @@ def format_rivals(rep: dict) -> str:
     return "\n".join(L)
 
 
+def rivals_brief_stored() -> str:
+    """خلاصهٔ فشردهٔ رقبا از آخرین اسنپ‌شاتِ ذخیره‌شده (بدونِ HTTP) — خوراکِ سریعِ تقویم بدونِ کندکردنِ /igplan."""
+    out = []
+    for h in db.rivals():
+        s = db.rival_last_snap(h)
+        if s and s.get("followers"):
+            out.append(f"@{h}: فالوور {s['followers']}، پستِ۷روز {s.get('posts_7d')}، تعامل {s.get('avg_engagement')}")
+    return "؛ ".join(out)
+
+
 def rivals_brief(rep: dict) -> str:
     """خلاصهٔ فشردهٔ رقبا برای خوراکِ مدیرِ محتوایی (جلوزدن از رقبا)."""
     ok = [r for r in (rep.get("rivals") or []) if r.get("ok")]
