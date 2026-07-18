@@ -155,6 +155,14 @@ async def edit_caption(app: Application, message_id, chat_id, caption):
     )
 
 
+async def edit_media_photo(app: Application, message_id, chat_id, photo, caption):
+    """عکسِ شاخصِ یک کارتِ سفارش را (مثلاً پس از تعویضِ ساعت) روی همان پیام جایگزین می‌کند."""
+    await app.bot.edit_message_media(
+        chat_id=chat_id, message_id=message_id,
+        media=InputMediaPhoto(media=photo, caption=caption, parse_mode=ParseMode.HTML),
+    )
+
+
 # ---------- منو، گزارش‌ها و جستجو (فقط اعضای مجاز) ----------
 
 _MENU_TITLE = "🛍️ <b>منوی مدیریت فروش</b>\nیک گزینه را انتخاب کنید:"

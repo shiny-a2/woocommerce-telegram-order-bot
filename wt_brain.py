@@ -122,7 +122,8 @@ async def evaluate(name: str, done: str, opent: str, report: str, qa: str, store
     if directives:
         user = directives + "\n\n" + user
     try:
-        raw = (await _chat(system, user, 1100)).strip()
+        # بودجهٔ کافی + استدلالِ کم: مدلِ استدلالی با بودجهٔ کم کلِ آن را صرفِ reasoning می‌کند و JSON خالی/ناقص می‌دهد.
+        raw = (await _chat(system, user, 2800, effort="low")).strip()
         if raw.startswith("```"):
             raw = raw.strip("`")
             if raw[:4].lower() == "json":
@@ -299,8 +300,9 @@ async def ig_content_plan(a: dict, inventory: dict | None = None, rivals: str = 
     ورودی: a=igstats.summary()، inventory=igstats.instock_by_brand()، days=فهرستِ روزهای هدف.
     خروجی: {summary, calendar[{day,type,brand,time,hook,hashtags,stories}], brand_plan[]}.
     """
-    if not enabled() or not a or not a.get("ok"):
+    if not enabled() or not a:
         return {}
+    degraded = not a.get("ok")  # دادهٔ زندهٔ اینستاگرام در دسترس نیست → پلن از موجودی + استراتژیِ عمومی
     day_list = days or ["شنبه", "یک‌شنبه", "دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه"]
     inv = inventory or {}
     inv_line = ""
@@ -334,8 +336,13 @@ async def ig_content_plan(a: dict, inventory: dict | None = None, rivals: str = 
         "\"time\":\"...\",\"hook\":\"...\",\"hashtags\":\"...\",\"audio\":\"...پیشنهادِ موزیک/صدای ترند...\","
         "\"stories\":\"۱) …مدل/رفرنس… ۲) … (حداقل ۱۰ مورد)\"}],\"brand_plan\":[\"...\"]}"
     )
+    degraded_note = ("توجه: دادهٔ زندهٔ اینستاگرام الان در دسترس نیست؛ بر پایهٔ موجودیِ واقعیِ فروشگاه، "
+                     "ترندهای روزِ اینستاگرام و بهترین‌شیوه‌های عمومیِ محتوای ساعت، یک برنامه و سناریوی کاملِ "
+                     "محتوایی بده (همهٔ روزها کامل؛ آنالیزِ عددی نداریم، پس روی استراتژی و رفرنسِ موجودی تکیه کن).\n"
+                     if degraded else "")
     user = (
-        f"روزهایی که باید برنامه بدهی (فقط همین‌ها، به‌همین ترتیب): {'، '.join(day_list)}\n"
+        degraded_note
+        + f"روزهایی که باید برنامه بدهی (فقط همین‌ها، به‌همین ترتیب): {'، '.join(day_list)}\n"
         f"دستهٔ پیج: {a.get('category')}\nفالوور: {a.get('followers')} · رشدِ ۷روز: {a.get('growth_7d')}\n"
         f"تعامل به‌تفکیکِ نوع: {type_line}\n"
         f"بهترین ساعتِ انتشار: {bh.get('hour', '؟')} · بهترین روز: {bw.get('name', '؟')}\n"

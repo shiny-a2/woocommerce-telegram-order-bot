@@ -110,6 +110,19 @@ async def rebuild_and_edit(app, order_id: int):
         print(f"[edit] سفارش {order_id} گرفته نشد: {e}")
         return
     summary = plugin_events.summarize(await _safe_notes(order_id))
+    # تعویضِ ساعت: یک‌بار عکسِ ساعتِ جدید + محلِ انبارِ جدید را روی همان پیام جایگزین کن (نه فقط کپشن).
+    swap = any(str(c).startswith("🔄 تعویض") for c in (summary.get("corrections") or []))
+    if swap and db.get_meta(f"photo_swapped:{order_id}") != "1":
+        try:
+            photos_new, cap_fresh, _loc = await build_order_card(order)  # عکس/محلِ انبار از سفارشِ فعلی
+            if photos_new:
+                await telegram_io.edit_media_photo(app, message_id, chat_id, photos_new[0], cap_fresh)
+                db.set_meta(f"photo_swapped:{order_id}", "1")
+                db.update_after_edit(order_id, order.get("status"), cap_fresh)
+                print(f"[edit] تعویض: عکس و کپشنِ سفارش {order_id} به‌روزرسانی شد.")
+                return
+        except Exception as e:  # noqa: BLE001 — افت به ویرایشِ کپشن
+            print(f"[edit] آپدیتِ عکسِ تعویضِ {order_id} ناموفق: {e!r} — افت به کپشن.")
     caption_new = telegram_io.build_caption(order, stock_location, summary)
     if caption_new == caption_old:
         return

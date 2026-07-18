@@ -968,7 +968,9 @@ async def on_group_message(update, context) -> bool:
     text = (msg.text or "").strip()
 
     # پاسخِ سؤالاتِ ارزیابیِ AI (بعد از گزارش) — حتی اگر حالتِ حافظه با ری‌استارت پاک شده باشد، از DB بازیابی می‌شود
-    rid = _awaiting_answers.pop(user.id, None) or _pending_answer_rid(user.id)
+    rid = _awaiting_answers.pop(user.id, None)
+    if not rid and not (not _is_admin(user.id) and _parse_attendance(text)):
+        rid = _pending_answer_rid(user.id)  # ولی گزارشِ تازه (فرمتِ حضوروغیاب) را پاسخ نگیر
     if rid:
         await _finalize_eval(msg, user, rid, text)
         return True
@@ -1395,18 +1397,18 @@ async def maybe_manager_report(app):
     nowmin = now.hour * 60 + now.minute
     if nowmin < end:  # هنوز شیفت تمام نشده
         return
-    today = now.strftime("%Y-%m-%d")
-    if db.get_meta("last_perf_report") == today or _is_holiday(today):
+    day = _latest_report_day() or now.strftime("%Y-%m-%d")  # روزِ خودِ گزارش، نه today
+    if db.get_meta("last_perf_report") == day or _is_holiday(day):
         return
-    workers, _r, _o = _workers_and_reports(today)
+    workers, _r, _o = _workers_and_reports(day)
     if not workers:
         return
-    missing = workers_without_report(today)
+    missing = workers_without_report(day)
     if missing and nowmin < _PERF_FALLBACK_MIN:  # تا همه گزارش ندهند صبر کن (یادآوریِ ۲۱:۰۰ و ۲۳:۳۰ نهیب می‌زند)
         return
     try:
-        await telegram_io.send_to_managers(app, daily_perf_text(today), parse_mode="HTML")
-        db.set_meta("last_perf_report", today)  # فقط پس از ارسالِ موفق (وگرنه دوباره تلاش می‌شود)
+        await telegram_io.send_to_managers(app, daily_perf_text(day), parse_mode="HTML")
+        db.set_meta("last_perf_report", day)  # فقط پس از ارسالِ موفق (وگرنه دوباره تلاش می‌شود)
         tag = "کامل (همه گزارش دادند)" if not missing else f"با {len(missing)} نفرِ گزارش‌نداده (مهلت گذشت)"
         print(f"[worktasks] گزارشِ عملکردِ روزانه به مدیران ارسال شد — {tag}.")
     except Exception as e:
@@ -1423,24 +1425,37 @@ async def _send_managers(bot, text):
             print(f"[worktasks] ارسال به مدیر {t} ناموفق: {e!r}")
 
 
-async def maybe_send_perf_when_complete(bot):
-    """وقتی «آخرین گزارش‌دهنده» ثبت شد (همه‌ی پرسنل امروز گزارش دادند)، کارتِ عملکرد را به مدیران بفرست.
+def _latest_report_day():
+    """روزِ کاری‌ای که آخرین گزارش برایش ثبت شده (بر پایهٔ work_date/day)، در ۲ روزِ اخیر.
 
-    یک‌بار در روز (گاردِ last_perf_report — با گزارشِ زمان‌بندی‌شده مشترک). اگر کسی هنوز در حالِ
-    پاسخ به سؤالاتِ ارزیابی است، صبر می‌کند تا کارت ناقص نرود.
+    چون گزارشِ هر روز معمولاً صبحِ روزِ بعد می‌آید، «امروزِ تقویمی» با روزِ گزارش یکی نیست؛
+    پس تکمیل‌بودن باید روی روزِ خودِ گزارش سنجیده شود، نه today.
     """
-    today = clock.tehran_now().strftime("%Y-%m-%d")
-    if _is_holiday(today) or db.get_meta("last_perf_report") == today:
+    cutoff = time.time() - 2 * 24 * 3600
+    with db._lock:
+        r = db._conn.execute(
+            "SELECT day FROM wt_reports WHERE created_ts>=? ORDER BY day DESC, id DESC LIMIT 1", (cutoff,)).fetchone()
+    return r[0] if r else None
+
+
+async def maybe_send_perf_when_complete(bot):
+    """وقتی «آخرین گزارش‌دهنده» ثبت شد (همهٔ پرسنل برای همان روزِ کاری گزارش دادند)، کارتِ عملکرد را به مدیران بفرست.
+
+    یک‌بار در روز (گاردِ last_perf_report). اگر کسی هنوز در حالِ پاسخ به سؤالاتِ ارزیابی است، صبر می‌کند.
+    روزِ سنجش = روزِ خودِ گزارش (work_date)، نه today.
+    """
+    day = _latest_report_day()
+    if not day or _is_holiday(day) or db.get_meta("last_perf_report") == day:
         return
     if _awaiting_answers:  # کسی هنوز در حالِ ارزیابی است → هنوز آخرین نفر تمام نشده
         return
-    workers, _r, _o = _workers_and_reports(today)
-    if not workers or workers_without_report(today):  # هنوز همه گزارش نداده‌اند
+    workers, _r, _o = _workers_and_reports(day)
+    if not workers or workers_without_report(day):  # هنوز همه برای این روز گزارش نداده‌اند
         return
     try:
-        await _send_managers(bot, daily_perf_text(today))
-        db.set_meta("last_perf_report", today)  # فقط پس از ارسالِ موفق
-        print("[worktasks] همه گزارش دادند → کارتِ عملکرد به مدیران ارسال شد.")
+        await _send_managers(bot, daily_perf_text(day))
+        db.set_meta("last_perf_report", day)  # فقط پس از ارسالِ موفق
+        print(f"[worktasks] همه گزارش دادند ({day}) → کارتِ عملکرد به مدیران ارسال شد.")
     except Exception as e:  # noqa: BLE001
         print(f"[worktasks] گزارشِ عملکردِ رویدادی ناموفق: {e!r}")
 
@@ -1973,8 +1988,8 @@ async def _build_and_assign_igplan(actor_id, days):
     """
     r = await igstats.summary()
     if not r.get("ok"):
-        return None, 0
-    inventory = await igstats.instock_by_brand()               # محصولاتِ تعداد≥۱ (چرخشی برای پوششِ رفرنس‌ها)
+        r = {"ok": False}  # IG قطع است → پلن از موجودیِ سایت + استراتژی/سناریوی عمومی ساخته می‌شود (نه هیچ)
+    inventory = await igstats.instock_by_brand()               # از سایت است، مستقلِ IG (تعداد≥۱، چرخشی)
     rivals_brief = igstats.rivals_brief_stored()                # از اسنپ‌شاتِ ذخیره‌شده (سریع)
     covered = " | ".join(db.last_plan_models(14))               # عدمِ تکرارِ مدل‌های اخیر
     plan = await wt_brain.ig_content_plan(r, inventory, rivals_brief, covered, days)
@@ -2046,21 +2061,28 @@ async def maybe_ig_autoplan(app):
     wk = now.strftime("%Y-%W")
     if db.get_meta("last_ig_autoplan") == wk:
         return
-    db.set_meta("last_ig_autoplan", wk)
     try:
         days = _days_until_friday(now)  # شنبه → کلِ هفته
         plan, made = await _build_and_assign_igplan(0, days)
         if not plan:
-            return
-        for ch in _igplan_messages(plan, days, made):  # خلاصه + هر روز یک پیامِ تمیز
-            await _send_managers(app.bot, ch)
+            return  # ساخت نشد (حتی با فالبک) → متا ست نمی‌شود تا دورِ بعد دوباره تلاش شود
+        group = _workgroup()
+        for ch in _igplan_messages(plan, days, made):  # خلاصه + هر روز یک پیامِ تمیز → گروهِ کار
+            try:
+                if group:
+                    await app.bot.send_message(group, ch, parse_mode=ParseMode.HTML)
+                else:
+                    await _send_managers(app.bot, ch)
+            except Exception:  # noqa: BLE001
+                pass
+        db.set_meta("last_ig_autoplan", wk)  # فقط پس از ساخت و ارسالِ موفق
         ig_uid = _ig_admin_uid()
         if ig_uid:
             try:
                 await app.bot.send_message(ig_uid, "📅 برنامهٔ محتواییِ این هفته‌ات آماده شد — با /tasks ببین 💪")
             except Exception:  # noqa: BLE001
                 pass
-        print(f"[worktasks] پلنِ محتواییِ خودکارِ هفتگی ساخته شد ({_fa(made)} تسک).")
+        print(f"[worktasks] پلنِ محتواییِ خودکارِ هفتگی ساخته شد ({_fa(made)} تسک) — به گروه ارسال شد.")
     except Exception as e:  # noqa: BLE001
         print(f"[worktasks] پلنِ خودکار ناموفق: {e!r}")
 

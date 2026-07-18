@@ -350,15 +350,17 @@ async def _poll_edits_incremental(app):
     """فقط سفارش‌هایی که date_modified‌شان عوض شده یا خیلی تازه‌اند rebuild می‌شوند (نه فچِ همه)."""
     since = time.time() - config.NOTE_LOOKBACK_DAYS * 86400
     tracked = db.tracked_orders(since)
-    if not tracked:
-        return
     changed = await wc_sync.changed_since_last()  # {oid: date_modified} یا None اگر sync ناموفق
     if changed is None:
         return  # سایت در دسترس نبود → این دور رد کن، دورِ بعد دوباره
+    # سفارش‌های تغییرکردهٔ پست‌شده حتی اگر قدیمی‌تر از پنجرهٔ ردیابی باشند (مثلاً تعویضِ یک سفارشِ قدیمی)
+    candidates = set(tracked) | {oid for oid in changed if db.is_posted(oid)}
+    if not candidates:
+        return
     stored = db.orders_modified_map()
     fresh = set(db.tracked_orders(time.time() - config.WC_EDIT_FRESH_HOURS * 3600))  # تازه‌ها → نوت‌گیری
     edited = 0
-    for oid in tracked:
+    for oid in candidates:
         dm = changed.get(oid)
         if not ((oid in fresh) or (dm is not None and dm != stored.get(oid))):
             continue  # نه تغییر کرده نه تازه → فچِ detail نکن
@@ -370,7 +372,7 @@ async def _poll_edits_incremental(app):
         except Exception as e:
             print(f"[poller] بازبینی سفارش {oid} شکست خورد: {e}")
     if edited:
-        print(f"[wc] {edited} سفارش بازبینی شد (از {len(tracked)} ردیابی‌شده) — بدونِ full-scan.")
+        print(f"[wc] {edited} سفارش بازبینی شد (از {len(candidates)} کاندید) — بدونِ full-scan.")
 
 
 async def run(app):
