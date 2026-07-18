@@ -111,8 +111,31 @@ async def _product_photo_by_name(name):
     return await media.fetch_jpeg(src) if src else None
 
 
+def _fa_label(canvas, x, w, text, color):
+    """نوارِ رنگیِ بالای یک نیمه با متنِ فارسیِ درست (reshape+bidi) — مثلِ «قبل»/«بعد»."""
+    from PIL import ImageDraw, ImageFont
+    try:
+        import arabic_reshaper
+        from bidi.algorithm import get_display
+        txt = get_display(arabic_reshaper.reshape(text))
+    except Exception:  # noqa: BLE001 — اگر کتابخانه نبود، بی‌برچسب ادامه بده
+        return
+    draw = ImageDraw.Draw(canvas, "RGBA")
+    fs = max(20, canvas.height // 16)
+    try:
+        font = ImageFont.truetype(r"C:\Windows\Fonts\tahoma.ttf", fs)
+    except Exception:  # noqa: BLE001
+        font = ImageFont.load_default()
+    tb = draw.textbbox((0, 0), txt, font=font)
+    tw, th = tb[2] - tb[0], tb[3] - tb[1]
+    pad = max(6, fs // 3)
+    bar_h = th + 2 * pad
+    draw.rectangle([x, 0, x + w, bar_h], fill=color + (225,))
+    draw.text((x + (w - tw) // 2 - tb[0], pad - tb[1]), txt, font=font, fill=(255, 255, 255))
+
+
 def _compose_side_by_side(a, b):
-    """دو عکسِ محصول را کنارِ هم در یک تصویرِ واحد می‌چسباند (نمایشِ قدیمی+جدیدِ تعویض در یک کارت)."""
+    """دو عکسِ محصول را کنارِ هم در یک تصویر می‌چسباند، با برچسبِ «قبل» (اصلی) و «بعد» (تعویضی)."""
     from PIL import Image
     import io
     ia = Image.open(io.BytesIO(a)).convert("RGB")
@@ -125,8 +148,10 @@ def _compose_side_by_side(a, b):
     ia, ib = _rz(ia), _rz(ib)
     gap = 14
     canvas = Image.new("RGB", (ia.width + ib.width + gap, h), (255, 255, 255))
-    canvas.paste(ia, (0, 0))
-    canvas.paste(ib, (ia.width + gap, 0))
+    canvas.paste(ia, (0, 0))                       # چپ: ساعتِ اصلی
+    canvas.paste(ib, (ia.width + gap, 0))          # راست: ساعتِ تعویضی
+    _fa_label(canvas, 0, ia.width, "قبل", (110, 110, 110))
+    _fa_label(canvas, ia.width + gap, ib.width, "بعد", (34, 150, 68))
     out = io.BytesIO()
     canvas.save(out, format="JPEG", quality=88)
     return out.getvalue()
