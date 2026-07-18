@@ -1,6 +1,8 @@
 python-telegram-bot>=21,<22
 woocommerce>=3.0.0
 Pillow>=10.0
+arabic-reshaper>=3.0
+python-bidi>=0.4
 jdatetime>=4.1.0
 python-dotenv>=1.0
 fastapi>=0.110
