@@ -80,7 +80,7 @@ def _product_line(order) -> str:
     return "🛍️ محصول:\n" + "\n".join("• " + p for p in parts)
 
 
-def build_caption(order, stock_location=None, summary=None) -> str:
+def build_caption(order, stock_location=None, summary=None, items_regular=None) -> str:
     f = woo.caption_fields(order)
     summary = summary or {}
     location = summary.get("location") or stock_location  # موقعیت دقیقِ پلاگین مقدم است
@@ -106,18 +106,24 @@ def build_caption(order, stock_location=None, summary=None) -> str:
     lines.append(_product_line(order))
     if location:
         lines.append(f"📦 موقعیت موجودی: {_esc(location)}")
-    # تفکیکِ مالی: اگر تخفیف دارد، قیمتِ قبل تخفیف + مبلغِ تخفیف/کوپن + حملِ اگر بود + پرداختی
+    # تفکیکِ مالی: «قیمتِ قبل تخفیف» = قیمتِ اصلیِ محصول (حراج) اگر داده شد، وگرنه جمعِ آیتم‌ها؛
+    # تخفیف = حراجِ محصول + کوپن روی هم، سپس حمل و پرداختی.
     try:
-        disc = float(f.get("discount_total") or 0)
         ship = float(f.get("shipping_total") or 0)
+        total = float(f.get("total") or 0)
+        items_sub = float(f.get("items_subtotal") or 0)
     except (TypeError, ValueError):
-        disc, ship = 0.0, 0.0
+        ship, total, items_sub = 0.0, 0.0, 0.0
     cl_ = config.CURRENCY_LABEL
-    if disc > 0:
-        lines.append(f"🏷️ قیمت قبل تخفیف: {reports.fmt_money(f.get('items_subtotal') or 0)} {cl_}")
+    pre = float(items_regular or 0)          # مجموعِ قیمتِ اصلی (قبل از حراج)
+    if pre < items_sub:                      # اگر داده نشد یا کمتر بود → همان جمعِ آیتم‌ها
+        pre = items_sub
+    total_disc = pre - (total - ship)        # حراجِ محصول + کوپن
+    if total_disc > 0.5:
+        lines.append(f"🏷️ قیمت قبل تخفیف: {reports.fmt_money(pre)} {cl_}")
         cps = [c for c in (f.get('coupons') or []) if c]
         cp_txt = (" (کوپن: " + "، ".join(_esc(c) for c in cps) + ")") if cps else ""
-        lines.append(f"➖ تخفیف{cp_txt}: {reports.fmt_money(disc)} {cl_}")
+        lines.append(f"➖ تخفیف{cp_txt}: {reports.fmt_money(total_disc)} {cl_}")
         if ship > 0:
             lines.append(f"🚚 هزینه ارسال: {reports.fmt_money(ship)} {cl_}")
         lines.append(f"💰 مبلغ پرداختی: {reports.fmt_money(f['total'])} {cl_}")

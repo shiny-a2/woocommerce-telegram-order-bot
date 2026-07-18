@@ -79,7 +79,8 @@ async def build_order_card(order):
 
     stock_location = "، ".join(dict.fromkeys(locations)) if locations else None
     summary = plugin_events.summarize(await _safe_notes(order.get("id")))
-    caption = telegram_io.build_caption(order, stock_location, summary)
+    items_regular = await _items_regular_subtotal(order)  # برای نمایشِ تخفیفِ حراجِ محصول
+    caption = telegram_io.build_caption(order, stock_location, summary, items_regular)
     return photos, caption, stock_location
 
 
@@ -97,6 +98,29 @@ async def process_order(app, order_id: int):
         msg_id = await telegram_io.post_order(app, order, photos, caption)
         db.mark_posted(order_id, msg_id, config.TELEGRAM_GROUP_ID, order.get("status"), stock_location, caption)
         print(f"[pipeline] سفارش {order_id} درج شد (پیام {msg_id}، {len(photos)} عکس).")
+
+
+async def _items_regular_subtotal(order):
+    """مجموعِ قیمتِ اصلی (قبل از حراج) همهٔ کالاها — تا تخفیفِ حراجِ خودِ محصول هم در کپشن بیاید (get_product کش‌شده)."""
+    total_reg = 0.0
+    for it in (order.get("line_items") or []):
+        try:
+            qty = float(it.get("quantity") or 1)
+            sub = float(it.get("subtotal") or 0)  # قیمتِ فروش (حراج) × تعداد
+        except (TypeError, ValueError):
+            continue
+        reg_line = sub
+        pid = it.get("product_id")
+        if pid:
+            try:
+                p = await woo.get_product(pid)
+                rp = float(p.get("regular_price") or 0)
+                if rp > 0 and rp * qty > sub:  # محصول روی حراج بوده → قیمتِ اصلی بیشتر است
+                    reg_line = rp * qty
+            except Exception:  # noqa: BLE001
+                pass
+        total_reg += reg_line
+    return total_reg
 
 
 async def _product_photo_by_name(name):
@@ -191,7 +215,8 @@ async def rebuild_and_edit(app, order_id: int):
                 db.set_meta(f"photo_swapped:{order_id}", "1")
                 return
             print(f"[edit] آپدیتِ عکسِ تعویضِ {order_id} ناموفق: {e!r} — افت به کپشن.")
-    caption_new = telegram_io.build_caption(order, stock_location, summary)
+    items_regular = await _items_regular_subtotal(order)  # تخفیفِ حراجِ محصول در کپشنِ بازسازی هم بماند
+    caption_new = telegram_io.build_caption(order, stock_location, summary, items_regular)
     if caption_new == caption_old:
         return
     try:
