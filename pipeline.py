@@ -99,6 +99,39 @@ async def process_order(app, order_id: int):
         print(f"[pipeline] سفارش {order_id} درج شد (پیام {msg_id}، {len(photos)} عکس).")
 
 
+async def _product_photo_by_name(name):
+    """عکسِ اولِ محصولی که با این نام/رفرنس در فروشگاه پیدا می‌شود (برای ساعتِ تعویض‌شده)."""
+    try:
+        rows = await woo.get("products", {"search": name, "per_page": 1, "_fields": "id,name,images"})
+    except Exception as e:  # noqa: BLE001
+        print(f"[edit] جستجوی محصولِ «{name}» ناموفق: {e!r}")
+        return None
+    imgs = (rows[0].get("images") if rows else None) or []
+    src = imgs[0].get("src") if imgs else None
+    return await media.fetch_jpeg(src) if src else None
+
+
+def _compose_side_by_side(a, b):
+    """دو عکسِ محصول را کنارِ هم در یک تصویرِ واحد می‌چسباند (نمایشِ قدیمی+جدیدِ تعویض در یک کارت)."""
+    from PIL import Image
+    import io
+    ia = Image.open(io.BytesIO(a)).convert("RGB")
+    ib = Image.open(io.BytesIO(b)).convert("RGB")
+    h = max(ia.height, ib.height)
+
+    def _rz(im):
+        return im if im.height == h else im.resize((max(1, round(im.width * h / im.height)), h))
+
+    ia, ib = _rz(ia), _rz(ib)
+    gap = 14
+    canvas = Image.new("RGB", (ia.width + ib.width + gap, h), (255, 255, 255))
+    canvas.paste(ia, (0, 0))
+    canvas.paste(ib, (ia.width + gap, 0))
+    out = io.BytesIO()
+    canvas.save(out, format="JPEG", quality=88)
+    return out.getvalue()
+
+
 async def rebuild_and_edit(app, order_id: int):
     """کپشن سفارش پست‌شده را بازسازی و در صورت تغییر ویرایش می‌کند."""
     message_id, chat_id, status_old, caption_old, stock_location = db.get_edit_row(order_id)
@@ -110,16 +143,22 @@ async def rebuild_and_edit(app, order_id: int):
         print(f"[edit] سفارش {order_id} گرفته نشد: {e}")
         return
     summary = plugin_events.summarize(await _safe_notes(order_id))
-    # تعویضِ ساعت: یک‌بار عکسِ ساعتِ جدید + محلِ انبارِ جدید را روی همان پیام جایگزین کن (نه فقط کپشن).
-    swap = any(str(c).startswith("🔄 تعویض") for c in (summary.get("corrections") or []))
+    # تعویضِ ساعت: یک‌بار عکسِ «قدیمی + جدید» را کنارِ هم در همان کارت بگذار (نه فقط کپشن).
+    # line_item هنوز ساعتِ قدیمی است؛ نامِ ساعتِ جدید فقط در نوتِ تعویض هست (summary["swap"][0]).
+    swap = summary.get("swap")  # (نامِ جدید، نامِ قدیمی) یا None
     if swap and db.get_meta(f"photo_swapped:{order_id}") != "1":
         try:
-            photos_new, cap_fresh, _loc = await build_order_card(order)  # عکس/محلِ انبار از سفارشِ فعلی
-            if photos_new:
-                await telegram_io.edit_media_photo(app, message_id, chat_id, photos_new[0], cap_fresh)
+            photos_old, cap_fresh, _loc = await build_order_card(order)  # عکسِ line_item (ساعتِ قدیمی)
+            old_photo = photos_old[0] if photos_old else None
+            new_photo = await _product_photo_by_name(swap[0])           # عکسِ ساعتِ جدید (از نوت)
+            combined = (_compose_side_by_side(old_photo, new_photo)
+                        if (old_photo and new_photo) else (new_photo or old_photo))
+            if combined:
+                await telegram_io.edit_media_photo(app, message_id, chat_id, combined, cap_fresh)
                 db.set_meta(f"photo_swapped:{order_id}", "1")
                 db.update_after_edit(order_id, order.get("status"), cap_fresh)
-                print(f"[edit] تعویض: عکس و کپشنِ سفارش {order_id} به‌روزرسانی شد.")
+                n_imgs = 2 if (old_photo and new_photo) else 1
+                print(f"[edit] تعویض: عکسِ {n_imgs} ساعت + کپشنِ سفارش {order_id} به‌روزرسانی شد.")
                 return
         except Exception as e:  # noqa: BLE001 — افت به ویرایشِ کپشن
             print(f"[edit] آپدیتِ عکسِ تعویضِ {order_id} ناموفق: {e!r} — افت به کپشن.")

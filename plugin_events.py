@@ -114,4 +114,5 @@ def summarize(notes):
         "operations": operations,
         "location": location,
         "has_payment": bool(gateway),
+        "swap": swap,  # (نامِ ساعتِ جدید، نامِ ساعتِ قدیمی) یا None — برای گذاشتنِ عکسِ هر دو در کارت
     }
