@@ -123,7 +123,9 @@ def build_caption(order, stock_location=None, summary=None, items_regular=None) 
         lines.append(f"🏷️ قیمت قبل تخفیف: {reports.fmt_money(pre)} {cl_}")
         cps = [c for c in (f.get('coupons') or []) if c]
         cp_txt = (" (کوپن: " + "، ".join(_esc(c) for c in cps) + ")") if cps else ""
-        lines.append(f"➖ تخفیف{cp_txt}: {reports.fmt_money(total_disc)} {cl_}")
+        pct = round(total_disc / pre * 100) if pre > 0 else 0
+        pct_fa = str(pct).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
+        lines.append(f"➖ تخفیف {pct_fa}٪{cp_txt}: {reports.fmt_money(total_disc)} {cl_}")
         if ship > 0:
             lines.append(f"🚚 هزینه ارسال: {reports.fmt_money(ship)} {cl_}")
         lines.append(f"💰 مبلغ پرداختی: {reports.fmt_money(f['total'])} {cl_}")
