@@ -170,22 +170,26 @@ async def rebuild_and_edit(app, order_id: int):
     summary = plugin_events.summarize(await _safe_notes(order_id))
     # تعویضِ ساعت: یک‌بار عکسِ «قدیمی + جدید» را کنارِ هم در همان کارت بگذار (نه فقط کپشن).
     # line_item هنوز ساعتِ قدیمی است؛ نامِ ساعتِ جدید فقط در نوتِ تعویض هست (summary["swap"][0]).
-    swap = summary.get("swap")  # (نامِ جدید، نامِ قدیمی) یا None
+    # نوت: «X» ← Y  →  X (داخلِ «») ساعتِ اصلی/قبل است، و Y (بعدِ فلش) = line_itemِ فعلی = ساعتِ نهایی/بعد.
+    swap = summary.get("swap")  # (نامِ اصلی/قبل، نامِ نهایی/بعد) یا None
     if swap and db.get_meta(f"photo_swapped:{order_id}") != "1":
         try:
-            photos_old, cap_fresh, _loc = await build_order_card(order)  # عکسِ line_item (ساعتِ قدیمی)
-            old_photo = photos_old[0] if photos_old else None
-            new_photo = await _product_photo_by_name(swap[0])           # عکسِ ساعتِ جدید (از نوت)
-            combined = (_compose_side_by_side(old_photo, new_photo)
-                        if (old_photo and new_photo) else (new_photo or old_photo))
+            after_photos, cap_fresh, _loc = await build_order_card(order)  # line_item = ساعتِ نهایی (بعد)
+            after_photo = after_photos[0] if after_photos else None
+            before_photo = await _product_photo_by_name(swap[0])           # ساعتِ اصلی از نوت (قبل)
+            combined = (_compose_side_by_side(before_photo, after_photo)    # چپ=قبل، راست=بعد
+                        if (before_photo and after_photo) else (after_photo or before_photo))
             if combined:
                 await telegram_io.edit_media_photo(app, message_id, chat_id, combined, cap_fresh)
                 db.set_meta(f"photo_swapped:{order_id}", "1")
                 db.update_after_edit(order_id, order.get("status"), cap_fresh)
-                n_imgs = 2 if (old_photo and new_photo) else 1
+                n_imgs = 2 if (before_photo and after_photo) else 1
                 print(f"[edit] تعویض: عکسِ {n_imgs} ساعت + کپشنِ سفارش {order_id} به‌روزرسانی شد.")
                 return
-        except Exception as e:  # noqa: BLE001 — افت به ویرایشِ کپشن
+        except Exception as e:  # noqa: BLE001
+            if "not modified" in str(e).lower():  # همان عکس/کپشن از قبل روی کارت است → انجام‌شده
+                db.set_meta(f"photo_swapped:{order_id}", "1")
+                return
             print(f"[edit] آپدیتِ عکسِ تعویضِ {order_id} ناموفق: {e!r} — افت به کپشن.")
     caption_new = telegram_io.build_caption(order, stock_location, summary)
     if caption_new == caption_old:
