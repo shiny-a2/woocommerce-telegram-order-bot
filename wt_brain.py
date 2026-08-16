@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import config
 
@@ -24,20 +25,72 @@ def _client_():
     return _client
 
 
-async def _chat(system: str, user: str, max_tokens: int, effort: str | None = None) -> str:
-    m = config.WT_MODEL
+def _extract_usage(usage) -> dict:
+    """شمارشِ توکن‌ها را امن از response.usage درمی‌آورد (بدونِ crash اگر نبود/شکلش فرق کند). فقط عدد، نه محتوا."""
+    if not usage:
+        return {}
+
+    def g(obj, *names):
+        for n in names:
+            v = getattr(obj, n, None)
+            if v is None and isinstance(obj, dict):
+                v = obj.get(n)
+            if v is not None:
+                return v
+        return None
+
+    ctd, ptd = g(usage, "completion_tokens_details"), g(usage, "prompt_tokens_details")
+    return {
+        "in": g(usage, "prompt_tokens", "input_tokens"),
+        "out": g(usage, "completion_tokens", "output_tokens"),
+        "total": g(usage, "total_tokens"),
+        "reasoning": (g(ctd, "reasoning_tokens") if ctd else None),
+        "cached": (g(ptd, "cached_tokens") if ptd else None),
+    }
+
+
+def _log_llm(rec: dict) -> None:
+    """یک خطِ JSONِ متریک روی لاگ — فقط feature/model/latency/شمارشِ توکن؛ هیچ prompt/پاسخ/راز/نام/شماره/محتوای تسک."""
+    try:
+        print("[llm] " + json.dumps(rec, ensure_ascii=False, separators=(",", ":")))
+    except Exception:  # noqa: BLE001 — لاگ هرگز نباید مسیرِ اصلی را بشکند
+        pass
+
+
+async def _chat(system: str, user: str, feature: str = "misc",
+                max_tokens: int | None = None, effort: str | None = None) -> str:
+    """تنها نقطهٔ فراخوانیِ LLM. policy (model/max/effort/timeout) از config می‌آید؛ usage و latency ثبت می‌شوند.
+    exception را (مثلِ قبل) دوباره raise می‌کند تا fail-softِ فراخوان دست‌نخورده بماند."""
+    pol = config.wt_policy(feature)
+    m = pol["model"]
+    max_out = int(max_tokens) if max_tokens is not None else pol["max_output_tokens"]
+    eff = effort if effort is not None else pol["effort"]
     kwargs = {
         "model": m,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+        "timeout": pol["timeout"],
     }
     if m.startswith(("gpt-5", "o1", "o3", "o4")):  # مدل‌های استدلالی: temperature نمی‌گیرند
-        kwargs["max_completion_tokens"] = max_tokens
-        if effort:  # حالتِ «تینک»: بودجهٔ استدلالِ بیشتر برای خروجیِ کامل‌تر
-            kwargs["reasoning_effort"] = effort
+        kwargs["max_completion_tokens"] = max_out
+        if eff:  # فقط اگر مقدارِ effort پشتیبانی‌شده باشد
+            kwargs["reasoning_effort"] = eff
     else:
         kwargs["temperature"] = 0.4
-        kwargs["max_tokens"] = max_tokens
-    r = await _client_().chat.completions.create(**kwargs)
+        kwargs["max_tokens"] = max_out
+    t0 = time.monotonic()
+    try:
+        r = await _client_().chat.completions.create(**kwargs)
+    except Exception as e:  # لاگِ شکست، سپس raise (رفتارِ قبلی حفظ می‌شود)
+        _log_llm({"feature": feature, "model": m, "ok": False, "retries": 0,
+                  "latency_ms": int((time.monotonic() - t0) * 1000), "err": type(e).__name__})
+        raise
+    rec = {"feature": feature, "model": m, "ok": True, "retries": 0,
+           "latency_ms": int((time.monotonic() - t0) * 1000), "resp_id": getattr(r, "id", None)}
+    try:
+        rec.update(_extract_usage(getattr(r, "usage", None)))  # نبودِ usage نباید پاسخ را خراب کند
+    except Exception:  # noqa: BLE001
+        pass
+    _log_llm(rec)
     return (r.choices[0].message.content or "").strip()
 
 
@@ -69,8 +122,8 @@ async def followup_questions(name: str, done: str, opent: str, report: str, stor
     if directives:
         user = directives + "\n\n" + user
     try:
-        # بودجهٔ کافی + استدلالِ کم: در مدلِ استدلالی، بودجهٔ کم را reasoning می‌بلعد و خروجی خالی می‌شود.
-        return await _chat(system, user, 1400, effort="low")
+        # بودجه/effort از policyِ feature (task_followup): 1400 + low — رفتارِ فعلی حفظ می‌شود.
+        return await _chat(system, user, feature="task_followup")
     except Exception as e:
         print(f"[wt_brain] followup_questions خطا: {e!r}")
         return ""
@@ -122,8 +175,8 @@ async def evaluate(name: str, done: str, opent: str, report: str, qa: str, store
     if directives:
         user = directives + "\n\n" + user
     try:
-        # بودجهٔ کافی + استدلالِ کم: مدلِ استدلالی با بودجهٔ کم کلِ آن را صرفِ reasoning می‌کند و JSON خالی/ناقص می‌دهد.
-        raw = (await _chat(system, user, 2800, effort="low")).strip()
+        # بودجه/effort از policyِ feature (task_evaluate): 2800 + low — رفتارِ فعلی حفظ می‌شود.
+        raw = (await _chat(system, user, feature="task_evaluate")).strip()
         if raw.startswith("```"):
             raw = raw.strip("`")
             if raw[:4].lower() == "json":
@@ -200,7 +253,8 @@ async def interpret_manager_reply(original_bot_text: str, manager_reply: str, co
     if context:
         user += f"\n\nاطلاعاتِ کمکی:\n{context}"
     try:
-        raw = (await _chat(system, user, 600)).strip()
+        # policyِ feature (manager_reply): 600 + effort=low — رفعِ باگِ F3 (قبلاً بدونِ effort روی مدلِ استدلالی خالی می‌شد).
+        raw = (await _chat(system, user, feature="manager_reply")).strip()
         if raw.startswith("```"):
             raw = raw.strip("`")
             if raw[:4].lower() == "json":
@@ -270,7 +324,8 @@ async def route_issues(issues: list, staff: list) -> list:
     user = ("پرسنل و شرحِ وظایف:\n" + roster + "\n\nمشکلاتِ پیداشده (key | متن):\n"
             + "\n".join(f"- {i.get('key')} | {i.get('text')}" for i in norm))
     try:
-        raw = (await _chat(system, user, 800)).strip()
+        # policyِ feature (issue_routing): 800 + effort=low — رفعِ باگِ F3.
+        raw = (await _chat(system, user, feature="issue_routing")).strip()
         if raw.startswith("```"):
             raw = raw.strip("`")
             if raw[:4].lower() == "json":
@@ -293,7 +348,7 @@ async def route_issues(issues: list, staff: list) -> list:
 
 
 async def ig_content_plan(a: dict, inventory: dict | None = None, rivals: str = "", covered: str = "",
-                          days: list | None = None) -> dict:
+                          days: list | None = None, feature: str = "ig_content_plan") -> dict:
     """مدیرِ محتوا/آنالیزورِ ارشدِ مسلط به ساعت: از آنالیزِ واقعیِ پیج + موجودیِ واقعیِ فروشگاه، تقویمِ روزآگاه
     (فقط روزهای خواسته‌شده) با پست + ≥۱۰ استوریِ رفرنس‌دار در روز می‌سازد (موتورِ استدلالیِ کامل).
 
@@ -353,7 +408,8 @@ async def ig_content_plan(a: dict, inventory: dict | None = None, rivals: str = 
         + (f"\n\nرقبا (برای جلوزدن، نه کپی):\n{rivals}" if rivals else "")
     )
     try:
-        raw = (await _chat(system, user, 12000, effort="high")).strip()  # موتورِ ۵.۵ با استدلالِ کامل
+        # policyِ feature (ig_content_plan[_ondemand]): 12000 + high — سقف بدونِ شواهد کاهش نمی‌یابد.
+        raw = (await _chat(system, user, feature=feature)).strip()
         if raw.startswith("```"):
             raw = raw.strip("`")
             if raw[:4].lower() == "json":

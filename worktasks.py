@@ -28,7 +28,9 @@ import config
 import crm
 import db
 import igstats
+import taskservice
 import wt_brain
+import wt_hr
 
 _FA = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
 
@@ -58,6 +60,7 @@ def _jalali_month(month_str) -> str:
 
 _awaiting: dict[int, float] = {}  # user_id → ts: منتظرِ متنِ گزارش پس از زدنِ دکمه
 _AWAIT_TTL = 3600
+_awaiting_block: dict[int, tuple] = {}  # user_id → (task_id, ts): منتظرِ دلیلِ مسدودشدن پس از زدنِ دکمهٔ «مسدود»
 
 
 # ---------- راه‌اندازیِ جدول‌ها (روی همان اتصالِ db، بعد از db.init) ----------
@@ -138,6 +141,8 @@ def wt_init():
         except sqlite3.OperationalError:
             pass
         db._conn.commit()
+    taskservice.init_schema()  # جدول‌های audit + inbound-events + triggerهای append-only (additive)
+    wt_hr.init_hr_schema()     # جدول‌های پرسنل/حضور/حقوق (additive، idempotent، append-only audit)
     print("[worktasks] جدول‌های گزارشِ کار آماده شد.")
 
 
@@ -215,46 +220,95 @@ def _staff_roles():
 
 
 # ---------- تسک‌ها ----------
-def _add_task(assignee_id, assignee_name, assigner_id, assigner_name, text, source_key=None, metric=None) -> int:
+def _role_of(uid) -> str:
+    """نقشِ واقعیِ actor از کد (نه LLM): primary_admin/admin/staff/system. سازگار با گذشته (primary فقط اگر config ست باشد)."""
+    if not uid:
+        return "system"
+    if _is_admin(uid):
+        pid = getattr(config, "WT_PRIMARY_ADMIN_ID", 0)
+        return "primary_admin" if (pid and int(uid) == int(pid)) else "admin"
+    return "staff"
+
+
+def _mk_ctx(actor_id, operation, idem=""):
+    """MutationContext برای عملیاتِ تسک: actor از assigner/telegram می‌آید (نه از LLM)؛ 0/خالی → system."""
+    if not actor_id:
+        return taskservice.system_context(operation, idempotency_key=idem)
+    return taskservice.MutationContext(actor_id=int(actor_id), actor_role=_role_of(actor_id), source="telegram",
+                                       operation=operation, idempotency_key=idem)
+
+
+def _personnel_blocked(uid) -> bool:
+    """پرسنلِ غیرفعال: تسکِ جدید نگیرد و عملیاتِ جدید نکند (فقط وقتی WT_PERSONNEL_ENABLED). ناشناخته → مسدود نیست."""
+    if not getattr(config, "WT_PERSONNEL_ENABLED", False) or not uid:
+        return False
+    return wt_hr.is_active_personnel(uid) is False
+
+
+def _is_retired(uid) -> bool:
+    """قطعِ همکاریِ سبک (مستقل از flagِ HR): با metaِ retired:{uid}. بادوام و برگشت‌پذیر؛ سابقه حفظ می‌شود."""
+    return bool(uid) and db.get_meta(f"retired:{int(uid)}") == "1"
+
+
+def _staff_blocked(uid) -> bool:
+    """پرسنلِ قطع‌همکاری‌شده یا غیرفعال: تسکِ جدید/عملیاتِ جدید ندارد."""
+    return _is_retired(uid) or _personnel_blocked(uid)
+
+
+def _set_retired(actor_id, uid, name, retire=True):
+    """ثبتِ قطع/بازگشتِ همکاری + auditِ append-only (بدونِ حذفِ داده)."""
     with db._lock:
+        db._conn.execute("INSERT INTO meta(key, value) VALUES (?, ?) "
+                         "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                         (f"retired:{int(uid)}", "1" if retire else "0"))
         try:
-            cur = db._conn.execute(
-                """INSERT INTO wt_tasks(assignee_id, assignee_name, assigner_id, assigner_name, text, status,
-                                        created_ts, source_key, metric)
-                   VALUES (?,?,?,?,?, 'open', ?, ?, ?)""",
-                (assignee_id, assignee_name, assigner_id, assigner_name, text, time.time(), source_key, metric),
-            )
-            db._conn.commit()
-            return cur.lastrowid
-        except sqlite3.IntegrityError:  # کلیدِ بازِ تکراری (ریسِ /crawl و خزشِ خودکار) → نادیده
-            db._conn.rollback()
-            return -1
+            wt_hr._audit("staff", int(uid), "staff_retired" if retire else "staff_unretired",
+                         actor_id, new={"name": name, "retired": bool(retire)})
+        except Exception:  # noqa: BLE001 — audit نباید عملیات را بشکند
+            pass
+        db._conn.commit()
+
+
+def _add_task(assignee_id, assignee_name, assigner_id, assigner_name, text, source_key=None, metric=None,
+              ctx=None, kind="staff") -> int:
+    """ساختِ تسک از طریقِ سرویسِ متمرکز (audit + idempotency + task_kind). قرارداد: id تسک، یا -1 برای dupِ source_key/رد."""
+    if kind == "staff" and _staff_blocked(assignee_id):  # پرسنلِ قطع‌همکاری/غیرفعال تسکِ جدید نمی‌گیرد
+        print(f"[worktasks] تسک به پرسنلِ قطع‌همکاری/غیرفعال ({assignee_id}) واگذار نشد.")
+        return -1
+    if ctx is None:
+        ctx = _mk_ctx(assigner_id, "task_create")
+    res = taskservice.create_task(ctx, assignee_id, assignee_name, assigner_name, text,
+                                  source_key=source_key, metric=metric, task_kind=kind)
+    if res.status == "applied":
+        return res.task_id
+    if res.status == "duplicate" and res.task_id is not None:  # retryِ همان idempotency-key → همان id
+        return res.task_id
+    return -1  # noop (source_key dup) / unauthorized / invalid
 
 
 def _open_crawl_by_key() -> dict:
-    """{key: {id, text, metric, created_ts, assignee_name}} برای همه‌ی تسک‌های بازِ خزش (dedup/رفرش/تشدید)."""
+    """{key: {id, text, metric, created_ts, assignee_name}} برای تسک‌های بازِ خزش (dedup/رفرش/تشدید).
+
+    D-04: مبنای سنِ تشدید = escalation_ref_ts (اگر NULL بود، fallbackِ legacy به created_ts). خودِ created_ts دیگر
+    برای تشدید تغییر نمی‌کند؛ در همین dict با کلیدِ 'created_ts' مبنای تشدید برگردانده می‌شود (سازگاری با خواننده).
+    """
     with db._lock:
         rows = db._conn.execute(
-            "SELECT source_key, id, text, metric, created_ts, assignee_name FROM wt_tasks "
-            "WHERE status='open' AND source_key IS NOT NULL AND source_key<>''"
+            "SELECT source_key, id, text, metric, COALESCE(escalation_ref_ts, created_ts), assignee_name "
+            "FROM wt_tasks WHERE status='open' AND source_key IS NOT NULL AND source_key<>''"
         ).fetchall()
     return {r[0]: {"id": r[1], "text": r[2], "metric": r[3], "created_ts": r[4], "assignee_name": r[5]}
             for r in rows}
 
 
 def _update_crawl_task(task_id, text, metric):
-    """متن و متریکِ یک تسکِ بازِ خزش را به‌روز می‌کند (برای دسته‌های پویا یا بدترشده)."""
-    with db._lock:
-        db._conn.execute("UPDATE wt_tasks SET text=?, metric=? WHERE id=? AND status='open'",
-                         (text, metric, int(task_id)))
-        db._conn.commit()
+    """متن/متریکِ یک تسکِ بازِ خزش را از طریقِ سرویس (با audit) به‌روز می‌کند (D-05)."""
+    taskservice.refresh_crawl_task(taskservice.system_context("crawl_refresh"), task_id, text, metric)
 
 
 def _bump_crawl_task(task_id):
-    """ساعتِ عمرِ تسک را صفر می‌کند تا تشدیدِ بعدی یک TTL دیگر فاصله بگیرد."""
-    with db._lock:
-        db._conn.execute("UPDATE wt_tasks SET created_ts=? WHERE id=?", (time.time(), int(task_id)))
-        db._conn.commit()
+    """فاصله‌گذاریِ تشدید (D-04): escalation_ref_ts را به now می‌برد؛ created_ts دست‌نخورده می‌ماند. با audit."""
+    taskservice.bump_crawl_escalation(taskservice.system_context("crawl_escalation_bump"), task_id)
 
 
 def _recent_done_crawl_key(key, within_s) -> bool:
@@ -283,6 +337,30 @@ def _match_key(task_text, issues) -> str:
     return best
 
 
+_ROUTE_MIN_OVERLAP = 2  # حداقل هم‌پوشانیِ واژه با شرحِ وظایف برای اساینِ قطعیِ بدونِ LLM
+
+
+def _deterministic_route(fresh, staff) -> dict:
+    """مشکل→پرسنل را قطعی (بدونِ LLM) نگاشت می‌کند، فقط وقتی یک نفر به‌روشنی و به‌تنهایی مسئولش است.
+
+    خروجی: {key: assignee_name}. مواردِ مبهم/چندمسئوله/بی‌match در خروجی نیستند → همان‌ها به route_issues (LLM) می‌روند.
+    """
+    routed = {}
+    for i in fresh:
+        key = i.get("key") or ""
+        if not key:
+            continue
+        iw = _words(i.get("text"))
+        scored = sorted(((len(iw & _words(d)), n) for _u, n, d in staff), reverse=True)
+        if not scored:
+            continue
+        top_ov, top_name = scored[0]
+        second_ov = scored[1][0] if len(scored) > 1 else 0
+        if top_ov >= _ROUTE_MIN_OVERLAP and top_ov > second_ov:  # یکتا و مطمئن
+            routed[key] = top_name
+    return routed
+
+
 def _open_tasks(user_id):
     with db._lock:
         return db._conn.execute(
@@ -291,41 +369,40 @@ def _open_tasks(user_id):
         ).fetchall()
 
 
-def _task_done(task_id, user_id) -> bool:
-    with db._lock:
-        cur = db._conn.execute(
-            "UPDATE wt_tasks SET status='done', done_ts=? WHERE id=? AND assignee_id=? AND status='open'",
-            (time.time(), task_id, user_id),
-        )
-        db._conn.commit()
-        return cur.rowcount > 0
+def _task_done(task_id, user_id, ctx=None) -> bool:
+    """پرسنل تسکِ خودش را می‌بندد (مالکیت‌محور، از طریقِ سرویس). خروجی: True فقط اگر همین‌الان بسته شد."""
+    if ctx is None:
+        ctx = _mk_ctx(user_id, "task_mark_done")
+    return taskservice.mark_done(ctx, task_id).status == "applied"
 
 
-def _close_task_admin(tid):
-    """مدیر هر تسکِ بازی را می‌بندد (مالکیت‌محور نیست). خروجی: (assignee_name, text) یا None."""
-    with db._lock:
+def _close_task_admin(tid, ctx=None):
+    """مدیر/سیستم هر تسکِ بازی را می‌بندد (مالکیت‌محور نیست). خروجی: (assignee_name, text) یا None."""
+    with db._lock:  # ردیف را برای پیامِ تأیید پیش از بستن بخوان
         r = db._conn.execute(
             "SELECT assignee_name, text FROM wt_tasks WHERE id=? AND status='open'", (int(tid),)).fetchone()
-        if not r:
-            return None
-        db._conn.execute("UPDATE wt_tasks SET status='done', done_ts=? WHERE id=?", (time.time(), int(tid)))
-        db._conn.commit()
-    return r
+    if not r:
+        return None
+    if ctx is None:
+        ctx = taskservice.system_context("task_mark_done")  # fail-safe: actorِ system (کالر معمولاً ctxِ مدیر می‌دهد)
+    res = taskservice.mark_done(ctx, tid)
+    return r if res.status in ("applied", "duplicate", "noop") else None
 
 
-def _edit_task(tid, new_text):
-    """متنِ یک تسکِ باز را با دستورِ مدیر اصلاح می‌کند. خروجی: (assignee_name, old_text) یا None."""
+def _edit_task(tid, new_text, ctx=None):
+    """متنِ یک تسکِ باز را با دستورِ مدیر اصلاح می‌کند (از طریقِ سرویس). خروجی: (assignee_name, old_text) یا None."""
     nt = (new_text or "").strip()
     if not nt:
         return None
     with db._lock:
         r = db._conn.execute(
             "SELECT assignee_name, text FROM wt_tasks WHERE id=? AND status='open'", (int(tid),)).fetchone()
-        if not r:
-            return None
-        db._conn.execute("UPDATE wt_tasks SET text=? WHERE id=?", (nt, int(tid)))
-        db._conn.commit()
-    return r
+    if not r:
+        return None
+    if ctx is None:
+        ctx = taskservice.system_context("task_update")
+    res = taskservice.update_task(ctx, tid, nt)
+    return r if res.status in ("applied", "duplicate", "noop") else None
 
 
 def _add_report(user_id, name, text, kind="work", attendance=None) -> int:
@@ -348,7 +425,7 @@ _FA_NUM = str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")
 
 
 def _parse_attendance(text):
-    """ساعتِ ورود–خروج و تاریخِ کارکرد را از متنِ گزارش درمی‌آورد (فرمتِ عاطفه).
+    """ساعتِ ورود–خروج و تاریخِ کارکرد را از متنِ گزارش درمی‌آورد (فرمتِ اپراتور).
 
     خروجی: {"work_date","check_in","check_out","worked_min"} یا None اگر بازه‌ی «HH:MM - HH:MM» نبود.
     """
@@ -694,6 +771,11 @@ async def _process_report(msg, user, text) -> None:
         await msg.reply_text(_format_help_text(), parse_mode=ParseMode.HTML)
         return
     rid = _add_report(user.id, nm, text, attendance=att)
+    if getattr(config, "WT_ATTENDANCE_ENABLED", False):  # همان مسیرِ گزارش → دو رویدادِ حضور (dedup‌شده)
+        try:
+            wt_hr.record_from_report(user.id, att["work_date"], att["check_in"], att["check_out"])
+        except Exception as e:  # noqa: BLE001 — ثبتِ حضور نباید مسیرِ گزارش را بشکند
+            print(f"[worktasks] attendance record خطا: {e!r}")
     h, mnt = att["worked_min"] // 60, att["worked_min"] % 60
     await msg.reply_text(
         f"🌟 دمت گرم، گزارشت ثبت شد!\n"
@@ -716,11 +798,43 @@ def _mark_followup_asked(rid):
     db.set_meta(f"followup_asked:{rid}", "1")
 
 
-async def _gen_followup_questions(user_id, user_name, report_text) -> str:
-    """کانتکستِ کامل (تسک‌ها + آمارِ فروشگاه + کارِ مانده + دستورهای مدیر) را می‌سازد و سؤال‌های پیگیری را می‌گیرد."""
+# ---------- snapshotِ context برای یک چرخهٔ گزارش (followup + evaluate) ----------
+# بخشِ شبکه‌ایِ context (staff_context = آنالیزِ IG/فعالیتِ WP) در یک چرخه فقط یک‌بار fetch می‌شود و به هر دو
+# مصرف‌کننده تزریق می‌گردد. کشِ کوتاه‌مدت per-rid (نه بلندمدت/stale). _store_context خودش کشِ ۱۵دقیقه دارد.
+_report_ctx: dict[int, tuple[str, float]] = {}   # rid → (staff_context, ts)
+_REPORT_CTX_TTL = 6 * 3600                        # پنجرهٔ یک چرخهٔ گزارش→پاسخ
+
+
+def _ctx_log(rid, kind, size):
+    try:  # فقط متریک؛ هیچ محتوایی لاگ نمی‌شود
+        print(f"[ctx] rid={rid} {kind} staff_ctx_chars={size}")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _staff_context_cycle(rid, user_id) -> str:
+    """staff_context را برای یک چرخهٔ گزارش یک‌بار می‌سازد و برای evaluate بازاستفاده می‌کند (fail-soft)."""
+    snap = _report_ctx.get(rid)
+    if snap and (time.time() - snap[1]) < _REPORT_CTX_TTL:
+        _ctx_log(rid, "reuse", len(snap[0] or ""))
+        return snap[0]
+    sc = await _staff_context(user_id)            # همان تابعِ فعلی؛ تنها اینجا fetchِ شبکه رخ می‌دهد
+    cutoff = time.time() - _REPORT_CTX_TTL         # پاک‌سازیِ سبکِ ورودی‌های کهنه (ضدِ نشتِ حافظه)
+    for k in [k for k, (_v, ts) in _report_ctx.items() if ts < cutoff]:
+        _report_ctx.pop(k, None)
+    _report_ctx[rid] = (sc, time.time())
+    _ctx_log(rid, "build", len(sc or ""))
+    return sc
+
+
+async def _gen_followup_questions(user_id, user_name, report_text, staff_ctx=None) -> str:
+    """کانتکستِ کامل (تسک‌ها + آمارِ فروشگاه + کارِ مانده + دستورهای مدیر) را می‌سازد و سؤال‌های پیگیری را می‌گیرد.
+
+    staff_ctx (اختیاری): اگر از snapshotِ چرخه داده شود، staff_context دوباره از شبکه گرفته نمی‌شود.
+    """
     done, opent = _task_summaries(user_id)
     store = await _store_context()
-    sc = await _staff_context(user_id)
+    sc = staff_ctx if staff_ctx is not None else await _staff_context(user_id)
     if sc:
         store = (store + "\n" + sc) if store else sc
     co = _carryover_context(user_id)
@@ -736,7 +850,8 @@ async def _ai_followup(msg, user, rid, report_text):
         return
     _followup_inflight.add(rid)
     try:
-        qs = await _gen_followup_questions(user.id, _staff_name(user.id) or user.full_name, report_text)
+        sc = await _staff_context_cycle(rid, user.id)   # snapshotِ چرخه (یک‌بار fetch؛ برای evaluate بازاستفاده)
+        qs = await _gen_followup_questions(user.id, _staff_name(user.id) or user.full_name, report_text, staff_ctx=sc)
         if qs:
             _awaiting_answers[user.id] = rid
             _store_report_field(rid, "ai_questions", qs)
@@ -758,7 +873,8 @@ async def _resume_followup(bot, rid, user_id, user_name, report_text):
         return  # بدونِ گروه، پاسخِ کارمند قابلِ ثبت نیست (هندلرِ گروه آن را می‌گیرد)
     _followup_inflight.add(rid)
     try:
-        qs = await _gen_followup_questions(user_id, user_name, report_text)
+        sc = await _staff_context_cycle(rid, user_id)   # snapshotِ چرخه (یک‌بار fetch؛ برای evaluate بازاستفاده)
+        qs = await _gen_followup_questions(user_id, user_name, report_text, staff_ctx=sc)
         if qs:
             _awaiting_answers[user_id] = rid
             _store_report_field(rid, "ai_questions", qs)
@@ -802,7 +918,7 @@ async def _finalize_eval(msg, user, rid, answers):
         done, opent = _task_summaries(user.id)
         qa = f"{rep.get('ai_questions', '')}\nپاسخِ کارمند: {answers}"
         store = await _store_context()
-        sc = await _staff_context(user.id)
+        sc = await _staff_context_cycle(rid, user.id)   # از snapshotِ همان چرخه (بدونِ fetchِ دوبارهٔ IG/WP)
         if sc:
             store = (store + "\n" + sc) if store else sc
         co = _carryover_context(user.id)
@@ -819,6 +935,7 @@ async def _finalize_eval(msg, user, rid, answers):
                 made += 1
     except Exception as e:
         print(f"[worktasks] finalize خطا: {e!r}")
+    _report_ctx.pop(rid, None)  # پایانِ چرخه → snapshot آزاد شود
     tail = (f"\n📌 برای فردا {_fa(made)} تسکِ کوچک برات گذاشتم که مسیرت روشن باشه (با /tasks ببین). 💪"
             if made else "")
     await msg.reply_text("✅ عالی بود، ثبت شد! زحماتت برای مدیر لحاظ و دیده شد. دمت گرم 🙌" + tail)
@@ -868,8 +985,24 @@ def _resolve_target(msg, hint):
     return _staff_by_name(hint)
 
 
-async def _handle_manager_reply(msg, user) -> None:
-    """ریپلای مدیر روی پیامِ ربات را تفسیر و اجرا می‌کند: directive، ساخت/بستنِ تسک، اصلاح، «چشم مدیر»."""
+def _name_matches(hint) -> int:
+    """تعدادِ پرسنلِ منطبق با نامِ تقریبی (برای گاردِ ابهام). یوزرنیمِ دقیق = یکتا (۱)."""
+    h = (hint or "").strip().lstrip("@").lower()
+    if not h:
+        return 0
+    with db._lock:
+        rows = db._conn.execute("SELECT name, username FROM wt_staff").fetchall()
+    if any(u and u.lower() == h for _n, u in rows):
+        return 1
+    return sum(1 for n, _u in rows if n and h in n.lower())
+
+
+async def _handle_manager_reply(msg, user, ev_id=0) -> None:
+    """ریپلای مدیر روی پیامِ ربات را تفسیر و اجرا می‌کند: directive، ساخت/بستنِ تسک، اصلاح، «چشم مدیر».
+
+    idempotency: تحویلِ دوبارهٔ همین update دوباره اعمال نمی‌شود (claim ورودی + کلیدِ idempotency برای هر mutation).
+    ضدِ ابهام: تسکِ hallucinated یا نامِ چندمعنا mutation نمی‌سازد (lookup در سرویس + گاردِ نام).
+    """
     original = (msg.reply_to_message.text or msg.reply_to_message.caption or "").strip()
     reply = (msg.text or "").strip()
 
@@ -878,56 +1011,68 @@ async def _handle_manager_reply(msg, user) -> None:
         roster = db._conn.execute("SELECT name, username FROM wt_staff ORDER BY last_ts DESC LIMIT 30").fetchall()
     if roster:
         ctx_parts.append("اعضای تیم: " + "، ".join(f"{n}" + (f" (@{u})" if u else "") for n, u in roster))
-    # هدفِ محتمل (منشن یا زنجیره‌ی ریپلای) + تسک‌های بازش با شماره — تا مغز بتواند تسکِ اشتباه را برای اصلاح/بستن بشناسد
     likely = _resolve_target(msg, "")
     if likely:
         rows = _open_tasks(likely[0])
         if rows:
             ctx_parts.append(f"تسک‌های بازِ {likely[1]}: " + "؛ ".join(f"#{tid} {t}" for tid, t, _a in rows))
-    ctx = "\n".join(ctx_parts)
+    ctx_txt = "\n".join(ctx_parts)
 
-    r = await wt_brain.interpret_manager_reply(original, reply, ctx)
-    if not r:
+    r = await wt_brain.interpret_manager_reply(original, reply, ctx_txt)
+    if not r:  # خروجیِ مبهم/خالیِ LLM → هیچ mutationی اجرا نشود (fail closed)
         await msg.reply_text("چشم مدیر، متوجه شدم. (تفسیرِ خودکار خطا داد؛ اگر دستورِ دائمی است، کوتاه و صریح دوباره بفرست.)")
         return
 
-    done_lines = []
-    target = _resolve_target(msg, r["target_hint"]) if r["scope"] == "user" else None
+    # idempotencyِ ورودی توسطِ wrapperِ on_group_message انجام می‌شود (claimِ سراسری)؛ اینجا فقط کلیدِ سطحِ عملیات.
+    def _mctx(op, suffix):  # ctxِ مدیر برای هر mutation — actor/role از کد، نه از LLM
+        return taskservice.MutationContext(actor_id=user.id, actor_role=_role_of(user.id), source="telegram",
+                                           operation=op, source_event_id=str(ev_id),
+                                           idempotency_key=f"telegram:{ev_id}:{op}:{suffix}")
 
-    if r["directive"]:
-        if r["scope"] == "user" and target:
-            _add_directive("user", target[0], r["directive"], user.id, user.full_name)
-            done_lines.append(f"📌 دستورِ دائمی برای «{html.escape(target[1])}» ثبت شد و از این پس رعایت می‌شود.")
-        else:
-            _add_directive("global", None, r["directive"], user.id, user.full_name)
-            done_lines.append("📌 دستورِ دائمی برای کلِ تیم ثبت شد و در ارزیابی‌های بعدی اعمال می‌شود.")
+    if True:
+        done_lines = []
+        explicit = bool(_mentioned_users(msg)) or bool(
+            msg.reply_to_message and msg.reply_to_message.reply_to_message)
+        target = _resolve_target(msg, r["target_hint"]) if r["scope"] == "user" else None
 
-    if r["tasks"]:
-        if target:
-            _seen_id(target[0], target[1])
-            for t in r["tasks"][:6]:
-                _add_task(target[0], target[1], user.id, user.full_name, t)
-            done_lines.append(f"🗂️ {_fa(len(r['tasks'][:6]))} تسک برای «{html.escape(target[1])}» ساخته شد.")
-        else:
-            done_lines.append("⚠️ تسک ساخته نشد چون پرسنلِ هدف مشخص نبود — روی پیامِ خودِ او ریپلای بزن یا منشنش کن.")
+        if r["directive"]:
+            if r["scope"] == "user" and target:
+                _add_directive("user", target[0], r["directive"], user.id, user.full_name)
+                done_lines.append(f"📌 دستورِ دائمی برای «{html.escape(target[1])}» ثبت شد و از این پس رعایت می‌شود.")
+            else:
+                _add_directive("global", None, r["directive"], user.id, user.full_name)
+                done_lines.append("📌 دستورِ دائمی برای کلِ تیم ثبت شد و در ارزیابی‌های بعدی اعمال می‌شود.")
 
-    for e in r.get("edits", []):
-        rr = _edit_task(e["task_id"], e["new_text"])
-        done_lines.append(
-            f"✏️ تسک #{_fa(e['task_id'])} اصلاح شد → «{html.escape(e['new_text'][:70])}»" if rr
-            else f"↪️ تسک #{_fa(e['task_id'])} برای اصلاح پیدا نشد (شاید بسته است).")
+        if r["tasks"]:
+            ambiguous = (not explicit) and r["scope"] == "user" and _name_matches(r["target_hint"]) > 1
+            if target and not ambiguous:
+                _seen_id(target[0], target[1])
+                for idx, t in enumerate(r["tasks"][:6]):
+                    _add_task(target[0], target[1], user.id, user.full_name, t,
+                              ctx=_mctx("task_create", f"{idx}:{target[0]}"))
+                done_lines.append(f"🗂️ {_fa(len(r['tasks'][:6]))} تسک برای «{html.escape(target[1])}» ساخته شد.")
+            elif ambiguous:
+                done_lines.append("⚠️ چند نفر با این نام هست؛ برای جلوگیری از اشتباه تسک ساخته نشد — منشنش کن یا روی پیامش ریپلای بزن.")
+            else:
+                done_lines.append("⚠️ تسک ساخته نشد چون پرسنلِ هدف مشخص نبود — روی پیامِ خودِ او ریپلای بزن یا منشنش کن.")
 
-    for tid in r["close_task_ids"]:
-        rr = _close_task_admin(tid)
-        done_lines.append(f"✅ تسک #{_fa(tid)} («{html.escape(rr[1])}») بسته شد." if rr
-                          else f"↪️ تسک #{_fa(tid)} باز نبود یا پیدا نشد.")
+        for e in r.get("edits", []):
+            rr = _edit_task(e["task_id"], e["new_text"], ctx=_mctx("task_update", e["task_id"]))
+            done_lines.append(
+                f"✏️ تسک #{_fa(e['task_id'])} اصلاح شد → «{html.escape(e['new_text'][:70])}»" if rr
+                else f"↪️ تسک #{_fa(e['task_id'])} برای اصلاح پیدا نشد (شاید بسته است).")
 
-    if r["correction"]:
-        done_lines.append(f"📝 اصلاح لحاظ شد: {html.escape(r['correction'])}")
+        for tid in r["close_task_ids"]:
+            rr = _close_task_admin(tid, ctx=_mctx("task_mark_done", tid))
+            done_lines.append(f"✅ تسک #{_fa(tid)} («{html.escape(rr[1])}») بسته شد." if rr
+                              else f"↪️ تسک #{_fa(tid)} باز نبود یا پیدا نشد.")
 
-    ack = r["ack"] or "چشم مدیر، اعمال شد."
-    body = ack if not done_lines else ack + "\n\n" + "\n".join(done_lines)
-    await msg.reply_text(body, parse_mode=ParseMode.HTML)
+        if r["correction"]:
+            done_lines.append(f"📝 اصلاح لحاظ شد: {html.escape(r['correction'])}")
+
+        ack = r["ack"] or "چشم مدیر، اعمال شد."
+        body = ack if not done_lines else ack + "\n\n" + "\n".join(done_lines)
+        await msg.reply_text(body, parse_mode=ParseMode.HTML)
 
 
 def _is_holiday(day) -> bool:
@@ -952,9 +1097,9 @@ def _pending_answer_rid(user_id):
 
 # ---------- هوکِ پیامِ گروه (از on_text صدا زده می‌شود) ----------
 async def on_group_message(update, context) -> bool:
-    """در گروهِ گزارشِ کار: کشفِ پرسنل + ثبتِ تسک (منشنِ مدیر) + گزارشِ روزانه.
+    """wrapperِ idempotency ورودی (D-01): تحویلِ دوبارهٔ همین update دوباره پردازش/ثبت نمی‌شود.
 
-    اگر پیام مربوط به این ماژول بود True برمی‌گرداند (تا on_text ادامه ندهد).
+    منطقِ شاخه‌ها در _dispatch_group_message است. اگر پیام مربوط به این ماژول بود True برمی‌گرداند.
     """
     msg = update.effective_message
     chat = update.effective_chat
@@ -965,9 +1110,33 @@ async def on_group_message(update, context) -> bool:
     if not wg or chat.id != wg:
         return False
     _seen(user)  # کشفِ خودکارِ پرسنل
+    ev_id = getattr(update, "update_id", 0)
+    claim, _row = taskservice.claim_inbound("telegram", ev_id, operation="group_message", actor_id=user.id)
+    if claim in ("duplicate", "in_progress", "skip_permanent"):
+        return True  # تحویلِ دوباره → دوباره ثبت/پردازش نکن (گزارش/تسک دوباره ساخته نمی‌شود)
+    try:
+        handled = await _dispatch_group_message(update, msg, user, ev_id)
+        taskservice.complete_inbound("telegram", ev_id, result_code=("handled" if handled else "ignored"))
+        return handled
+    except Exception as e:  # noqa: BLE001 — رویداد را برای recovery علامت بزن (mutationها idempotentاند)
+        taskservice.fail_inbound("telegram", ev_id, type(e).__name__)
+        raise
+
+
+async def _dispatch_group_message(update, msg, user, ev_id) -> bool:
+    """منطقِ شاخه‌ها: پاسخِ ارزیابی / گزارش / تعطیل / ریپلای مدیر / منشنِ ساختِ تسک. idempotency ورودی در wrapper است."""
     text = (msg.text or "").strip()
 
-    # پاسخِ سؤالاتِ ارزیابیِ AI (بعد از گزارش) — حتی اگر حالتِ حافظه با ری‌استارت پاک شده باشد، از DB بازیابی می‌شود
+    # دلیلِ مسدودشدنِ تسک (پس از دکمهٔ «مسدود») — قبل از بقیهٔ شاخه‌ها
+    bl = _awaiting_block.get(user.id)
+    if bl and time.time() - bl[1] <= _AWAIT_TTL:
+        _awaiting_block.pop(user.id, None)
+        r = lifecycle_block(bl[0], user.id, text)
+        await msg.reply_text("⛔ ثبت شد؛ به مدیر اطلاع می‌رسد و کمکت می‌کنیم." if r.status == "applied"
+                             else "الان قابلِ ثبت نیست.")
+        return True
+
+    # پاسخِ سؤالاتِ ارزیابیِ AI (بعد از گزارش) — با بازیابیِ DB اگر حالتِ حافظه با ری‌استارت پاک شده باشد
     rid = _awaiting_answers.pop(user.id, None)
     if not rid and not (not _is_admin(user.id) and _parse_attendance(text)):
         rid = _pending_answer_rid(user.id)  # ولی گزارشِ تازه (فرمتِ حضوروغیاب) را پاسخ نگیر
@@ -981,9 +1150,7 @@ async def on_group_message(update, context) -> bool:
             await _process_report(msg, user, text)
             return True
 
-    # مدیر «تعطیل» اعلام می‌کند → تعطیلِ عمومیِ کلِ تیم برای امروز (نه یک شخص).
-    # مدیر به‌طورِ طبیعی روی پیامِ ربات (مثلاً یادآوریِ گزارش) ریپلای می‌زند. دستور اطاعت می‌شود
-    # و برای خودِ مدیر هیچ گزارشی ثبت نمی‌شود.
+    # مدیر «تعطیل» اعلام می‌کند → تعطیلِ عمومیِ کلِ تیم برای امروز
     if _is_admin(user.id) and _leave_kind(text) == "holiday":
         _set_holiday(clock.tehran_now().strftime("%Y-%m-%d"))
         await msg.reply_text(
@@ -995,7 +1162,7 @@ async def on_group_message(update, context) -> bool:
     # ریپلای مدیر روی پیامِ ربات = فرمان/اصلاح/دستورِ دائمی (حلقه‌ی بازخوردِ مدیر)
     rep = msg.reply_to_message
     if _is_admin(user.id) and rep and rep.from_user and rep.from_user.is_bot and wt_brain.enabled():
-        await _handle_manager_reply(msg, user)
+        await _handle_manager_reply(msg, user, ev_id=ev_id)
         return True
 
     # گزارشِ روزانه: پیامی که با «گزارش» شروع شود
@@ -1004,21 +1171,23 @@ async def on_group_message(update, context) -> bool:
         await _process_report(msg, user, body)
         return True
 
-    # گزارشِ بدونِ دکمه/پیشوند: اگر پیامِ یک کارمند فرمتِ حضوروغیاب (ساعتِ ورود–خروج) داشته باشد،
-    # همان را گزارشِ روزانه بگیر — مقاوم به ری‌استارت یا فراموشیِ دکمهٔ «ثبتِ گزارش».
+    # گزارشِ بدونِ دکمه/پیشوند: پیامِ کارمند با فرمتِ حضوروغیاب → گزارشِ روزانه
     if not _is_admin(user.id) and _parse_attendance(text):
         await _process_report(msg, user, text)
         return True
 
-    # ثبتِ تسک: فقط مدیر، با منشن
+    # ثبتِ تسک: فقط مدیر، با منشن (idempotency ورودی در wrapper؛ فقط کلیدِ سطحِ عملیات اینجا)
     if not _is_admin(user.id):
         return False
     assignees = _mentioned_users(msg)
     if not assignees:
         return False
-    for aid, aname in assignees:
+    for idx, (aid, aname) in enumerate(assignees):
         _seen_id(aid, aname)
-        _add_task(aid, aname, user.id, user.full_name, text)
+        ctx = taskservice.MutationContext(
+            actor_id=user.id, actor_role=_role_of(user.id), source="telegram", operation="task_create",
+            source_event_id=str(ev_id), idempotency_key=f"telegram:{ev_id}:task_create:{idx}:{aid}")
+        _add_task(aid, aname, user.id, user.full_name, text, ctx=ctx)
     who = "، ".join(a[1] for a in assignees)
     await msg.reply_text(f"🗂️ چشم! یه تسک برای {who} ثبت شد و به لیستش اضافه شد 💪 (با /tasks می‌بینه و می‌بنده)")
     return True
@@ -1036,13 +1205,50 @@ async def on_callback_hook(q, context) -> bool:
     if q.from_user:
         _seen(q.from_user)
 
-    if action == "done":
+    if action in ("done", "start", "block", "resume"):
         try:
             tid = int(parts[2])
         except (ValueError, IndexError):
             await _ans(q)
             return True
-        if _task_done(tid, uid):
+        # مسیرِ چرخه (flag روشن): start/block/resume/done از سرویسِ گذار. خاموش = رفتارِ legacyِ done.
+        if _lc_enabled():
+            if action == "start":
+                r = lifecycle_start(tid, uid, idem=f"telegram:cb:{q.id}:start:{tid}")
+                await _ans(q, "▶️ شروع شد، موفق باشی!" if r.status == "applied" else "الان قابلِ شروع نیست.")
+            elif action == "resume":
+                r = lifecycle_resume(tid, uid, idem=f"telegram:cb:{q.id}:resume:{tid}")
+                await _ans(q, "▶️ ادامه بده 💪" if r.status == "applied" else "الان قابلِ ادامه نیست.")
+            elif action == "block":
+                _awaiting_block[uid] = (tid, time.time())
+                await _ans(q, "دلیلِ مسدودشدن را همین‌جا بنویس ✍️")
+                try:
+                    await q.message.reply_text("⛔ چه چیزی مانع شده؟ کوتاه بنویس تا مدیر ببیند و کمک کند.")
+                except Exception:
+                    pass
+                return True
+            else:  # done
+                r, target = lifecycle_done(tid, uid, idem=f"telegram:cb:{q.id}:done:{tid}")
+                if r.status == "applied":
+                    msg_ok = ("🎉 عالی! ثبت و تأیید شد 💪" if target == "verified_done"
+                              else "📨 ثبت شد؛ برای تأییدِ مدیر رفت 🙌")
+                    await _ans(q, msg_ok)
+                    if target == "claimed_done":  # صحت‌سنجیِ خودکار (اگر mode=automatic) خارج از تراکنش
+                        asyncio.create_task(verify_and_apply(tid))
+                elif r.status == "noop":
+                    await _ans(q, "قبلاً ثبت شده.")
+                else:
+                    await _ans(q, "این تسک مالِ تو نیست یا در این وضعیت نیست.", alert=True)
+            await _refresh_task_list(q, uid)
+            return True
+        # ---- مسیرِ legacy (flag خاموش): دقیقاً مثلِ قبل ----
+        if action != "done":
+            await _ans(q)
+            return True
+        ctx = taskservice.MutationContext(actor_id=uid, actor_role=_role_of(uid), source="telegram",
+                                          operation="task_mark_done", source_event_id=str(q.id),
+                                          idempotency_key=f"telegram:cb:{q.id}:task_mark_done:{tid}")
+        if _task_done(tid, uid, ctx=ctx):
             await _ans(q, "🎉 آفرین! انجام شد 💪")
             try:
                 rows = _open_tasks(uid)
@@ -1076,11 +1282,37 @@ async def on_callback_hook(q, context) -> bool:
             pass
         return True
 
+    if action == "noop":  # دکمهٔ نمایشیِ «منتظرِ تأیید» — فقط ack
+        await _ans(q)
+        return True
+
+    if action in ("salok", "salno"):  # تأیید/لغوِ ثبتِ حقوق (فقط مدیرِ اصلی، صاحبِ pending)
+        if not _is_primary_admin(uid):
+            await _ans(q, "فقط مدیرِ اصلی.", alert=True)
+            return True
+        pend = _pending_salary.pop(uid, None)
+        if action == "salno" or not pend:
+            await _ans(q, "لغو شد" if action == "salno" else "موردی برای تأیید نبود.")
+            try:
+                await q.edit_message_text("✖️ ثبتِ حقوق لغو شد.")
+            except Exception:  # noqa: BLE001
+                pass
+            return True
+        ok = wt_hr.set_salary(uid, pend["pid"], pend["amount"], pend["method"])
+        await _ans(q, "ثبت شد ✅" if ok else "ثبت نشد.")
+        try:
+            if ok:
+                await q.edit_message_text(f"✅ حقوقِ {html.escape(pend['name'])} ثبت شد: "
+                                          f"{wt_hr.method_fa(pend['method'])} — {wt_hr.fmt_money(pend['amount'])}")
+        except Exception:  # noqa: BLE001
+            pass
+        return True
+
     if action == "tasks":  # «تسک‌های من»
         await _ans(q)
         rows = _open_tasks(uid)
         if rows:
-            await _reply_tasks(q.message, rows)
+            await _reply_tasks(q.message, rows, user_id=uid)
         else:
             try:
                 await q.message.reply_text("✅ آفرین! هیچ تسکِ بازی نداری، همه‌چیز به‌روزه 🎉")
@@ -1134,6 +1366,59 @@ def _tasks_kb(rows):
                                  for tid, _t, _a in rows])
 
 
+# ---------- نمایشِ تسک با چرخه (وقتی flag روشن است) ----------
+_LC_LABEL = {"open": "شروع‌نشده", "in_progress": "در حالِ انجام", "blocked": "مسدود",
+             "claimed_done": "منتظرِ تأیید", "reopened": "بازگشایی‌شده"}
+
+
+def _lc_open_tasks(user_id):
+    """تسک‌های غیرِ terminalِ کاربر با stateِ چرخه: [(id, text, assigner, state)]."""
+    with db._lock:
+        rows = db._conn.execute(
+            "SELECT id, text, assigner_name, lifecycle_state, status FROM wt_tasks "
+            "WHERE assignee_id=? AND status='open' ORDER BY id", (user_id,)).fetchall()
+    return [(tid, text, asg, taskservice.lifecycle_of(lc, st)) for tid, text, asg, lc, st in rows]
+
+
+def _lc_tasks_text(rows) -> str:
+    lines = [f"🗂️ <b>کارهای تو</b> ({_fa(len(rows))}) — قدم‌به‌قدم عالی پیش می‌ری 💪", ""]
+    for tid, text, asg, state in rows:
+        lines.append(f"• <code>#{tid}</code> [{_LC_LABEL.get(state, state)}] {text}  <i>(از {asg or '—'})</i>")
+    return "\n".join(lines)
+
+
+def _lc_tasks_kb(rows):
+    kb = []
+    for tid, _t, _a, state in rows:
+        row = []
+        if state in ("open", "reopened"):
+            row.append(InlineKeyboardButton(f"▶️ شروع #{tid}", callback_data=f"wt:start:{tid}"))
+            row.append(InlineKeyboardButton("✅ انجام شد", callback_data=f"wt:done:{tid}"))
+        elif state == "in_progress":
+            row.append(InlineKeyboardButton(f"⛔ مسدود #{tid}", callback_data=f"wt:block:{tid}"))
+            row.append(InlineKeyboardButton("✅ انجام شد", callback_data=f"wt:done:{tid}"))
+        elif state == "blocked":
+            row.append(InlineKeyboardButton(f"▶️ ادامه #{tid}", callback_data=f"wt:resume:{tid}"))
+            row.append(InlineKeyboardButton("✅ انجام شد", callback_data=f"wt:done:{tid}"))
+        elif state == "claimed_done":
+            row.append(InlineKeyboardButton(f"⏳ منتظرِ تأیید #{tid}", callback_data="wt:noop"))
+        if row:
+            kb.append(row)
+    return InlineKeyboardMarkup(kb) if kb else None
+
+
+async def _refresh_task_list(q, uid):
+    """پس از هر اکشنِ چرخه، لیستِ تسکِ کاربر را به‌روز نمایش می‌دهد (fail-soft)."""
+    try:
+        rows = _lc_open_tasks(uid)
+        if rows:
+            await q.edit_message_text(_lc_tasks_text(rows), parse_mode=ParseMode.HTML, reply_markup=_lc_tasks_kb(rows))
+        else:
+            await q.edit_message_text("✅ همه‌ی کارهایت به‌روزه. آفرین! 🎉")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def cmd_setworkgroup(update, context):
     """این گروه را به‌عنوانِ «گروهِ گزارشِ کار» ثبت می‌کند (فقط مدیر، داخلِ گروه)."""
     msg = update.effective_message
@@ -1169,7 +1454,7 @@ async def cmd_tasks(update, context):
     if not rows:
         await msg.reply_text("✅ آفرین! هیچ تسکِ بازی نداری، همه‌چیز به‌روزه 🎉")
         return
-    await _reply_tasks(msg, rows)
+    await _reply_tasks(msg, rows, user_id=user.id)
 
 
 async def cmd_report(update, context):
@@ -1224,7 +1509,8 @@ def _workers_and_reports(day):
         opencnt = dict(db._conn.execute(
             "SELECT assignee_id, COUNT(*) FROM wt_tasks WHERE status='open' GROUP BY assignee_id").fetchall())
     admins = set(config.ADMIN_USER_IDS)
-    workers = [(u, n) for u, n in workers if u not in admins]
+    # مدیران و پرسنلِ قطع‌همکاری‌شده از فهرستِ «کارمندان» کنار می‌روند (نه یادآوری، نه در کارتِ عملکرد).
+    workers = [(u, n) for u, n in workers if u not in admins and not _is_retired(u)]
     return workers, reported, opencnt
 
 
@@ -1253,6 +1539,34 @@ def _team_status_text() -> str:
 _REPORT_NUDGE_SLOTS = [(21 * 60, "last_nudge_2100"), (23 * 60 + 30, "last_nudge_2330")]
 
 
+# ---------- ارسالِ امنِ مشترک (رفعِ D-RG-01) ----------
+# روشِ کوچکِ مشترک برای همهٔ ارسال‌های زمان‌بندی‌شده (یادآوری/کارتِ عملکرد/نوتیفیکیشنِ چرخه).
+# الگوی صحیح: claim (مهلت‌دار) → send → complete. علامتِ موفقیت هرگز قبل از ارسالِ واقعی ست نمی‌شود.
+# روی in_progress هیچ گاردِ بیرونی ست نمی‌شود تا با انقضای lease، recovery و تلاشِ دوباره ممکن بماند
+# (پیش‌تر ست‌شدنِ گاردِ meta روی in_progress باعثِ گم‌شدنِ دائمیِ پیام می‌شد — همان D-RG-01).
+async def _guarded_send(dkey, operation, send_coro):
+    """خروجی status ∈ {sent, duplicate, in_progress, skip_permanent, failed}. تحویل = at-least-once.
+
+    - claimed/recovered → ارسال، سپس complete (status=sent).
+    - duplicate/skip_permanent → قبلاً نهایی/تمام‌شده (کالر می‌تواند گاردِ خودش را هم‌راستا کند).
+    - in_progress → کسِ دیگری در جریان است؛ **گارد ست نکن** تا recovery ممکن بماند (رفعِ گم‌شدنِ دائمی).
+    - failed → این تلاش شکست خورد؛ retryable در دورِ بعد (گارد ست نمی‌شود).
+    پنجرهٔ مبهمِ «رسیدنِ پیام تا ثبتِ complete» ممکن است duplicate بسازد؛ این محدودیت پذیرفته و صریح ثبت شده است.
+    """
+    dclaim, _ = taskservice.delivery_claim(dkey, operation=operation)
+    if dclaim in ("duplicate", "skip_permanent"):
+        return dclaim
+    if dclaim == "in_progress":
+        return "in_progress"
+    try:  # claimed | recovered
+        m = await send_coro()
+        taskservice.delivery_complete(dkey, message_id=getattr(m, "message_id", ""))
+        return "sent"
+    except Exception as e:  # noqa: BLE001
+        taskservice.delivery_fail(dkey, type(e).__name__)
+        return "failed"
+
+
 async def maybe_report_reminder(app):
     """دو نوبت (۲۱:۰۰ و ۲۳:۳۰): به پرسنلی که هنوز گزارشِ امروز را نداده‌اند در گروهِ کار با منشن یادآوری کن.
 
@@ -1279,18 +1593,22 @@ async def maybe_report_reminder(app):
         return
     mentions = " ".join(f'<a href="tg://user?id={uid}">{html.escape(name)}</a>' for uid, name in missing)
     kb = InlineKeyboardMarkup([[InlineKeyboardButton("📝 ثبتِ گزارش", callback_data="wt:report")]])
-    try:
-        await app.bot.send_message(
-            group,
-            "🌸 <b>یادآوریِ گزارش</b>\nمی‌دونم حسابی زحمت کشیدید 💚 "
-            "این عزیزان فقط گزارششون مونده — هر وقت فرصت کردی چند خط با تاریخ و ساعتِ ورود–خروج برامون بنویس "
-            "تا زحماتت کامل دیده بشه 👇\n" + mentions,
-            parse_mode=ParseMode.HTML, reply_markup=kb)
-        for key in due:  # فقط پس از ارسالِ موفق مصرف‌شده کن (وگرنه نوبتِ بعد دوباره تلاش می‌کند)
+    # رفعِ D-RG-01: از الگوی امنِ مشترک. گاردِ metaِ روزانه فقط پس از ارسالِ قطعی/duplicate ست می‌شود،
+    # نه روی in_progress/failed — تا crashِ قبل از ارسال به گم‌شدنِ دائمی منجر نشود (recovery باقی می‌ماند).
+    dkey = f"reminder:{today}:" + "+".join(sorted(due))
+    txt = ("🌸 <b>یادآوریِ گزارش</b>\nمی‌دونم حسابی زحمت کشیدید 💚 "
+           "این عزیزان فقط گزارششون مونده — هر وقت فرصت کردی چند خط با تاریخ و ساعتِ ورود–خروج برامون بنویس "
+           "تا زحماتت کامل دیده بشه 👇\n" + mentions)
+    status = await _guarded_send(dkey, "report_reminder",
+                                 lambda: app.bot.send_message(group, txt, parse_mode=ParseMode.HTML, reply_markup=kb))
+    if status in ("sent", "duplicate", "skip_permanent"):  # نهایی‌شده (فرستاده/قبلاً‌فرستاده/سقفِ تلاش) → گارد هم‌راستا
+        for key in due:
             db.set_meta(key, today)
-        print(f"[worktasks] یادآوریِ گزارش به {len(missing)} نفر ارسال شد ({'،'.join(due)}).")
-    except Exception as e:
-        print(f"[worktasks] یادآوری ناموفق: {e!r}")
+        if status == "sent":
+            print(f"[worktasks] یادآوریِ گزارش به {len(missing)} نفر ارسال شد ({'،'.join(due)}).")
+        elif status == "skip_permanent":
+            print(f"[worktasks] یادآوریِ گزارش پس از سقفِ تلاش نهایی‌شد (failed_permanent) — {'،'.join(due)}.")
+    # in_progress/failed → گارد ست نمی‌شود؛ دورِ بعد پس از انقضای lease دوباره تلاش می‌شود.
 
 
 # ---------- گزارشِ مدیران (روزانه + ماهانه، فقط مدیران) ----------
@@ -1406,13 +1724,15 @@ async def maybe_manager_report(app):
     missing = workers_without_report(day)
     if missing and nowmin < _PERF_FALLBACK_MIN:  # تا همه گزارش ندهند صبر کن (یادآوریِ ۲۱:۰۰ و ۲۳:۳۰ نهیب می‌زند)
         return
-    try:
-        await telegram_io.send_to_managers(app, daily_perf_text(day), parse_mode="HTML")
-        db.set_meta("last_perf_report", day)  # فقط پس از ارسالِ موفق (وگرنه دوباره تلاش می‌شود)
-        tag = "کامل (همه گزارش دادند)" if not missing else f"با {len(missing)} نفرِ گزارش‌نداده (مهلت گذشت)"
-        print(f"[worktasks] گزارشِ عملکردِ روزانه به مدیران ارسال شد — {tag}.")
-    except Exception as e:
-        print(f"[worktasks] گزارشِ مدیر ناموفق: {e!r}")
+    # رفعِ D-RG-01: الگوی امنِ مشترک؛ last_perf_report فقط پس از ارسالِ قطعی/duplicate ست می‌شود، نه روی in_progress.
+    status = await _guarded_send(f"perf:{day}", "manager_perf",
+                                 lambda: telegram_io.send_to_managers(app, daily_perf_text(day), parse_mode="HTML"))
+    if status in ("sent", "duplicate", "skip_permanent"):
+        db.set_meta("last_perf_report", day)
+        if status == "sent":
+            tag = "کامل (همه گزارش دادند)" if not missing else f"با {len(missing)} نفرِ گزارش‌نداده (مهلت گذشت)"
+            print(f"[worktasks] گزارشِ عملکردِ روزانه به مدیران ارسال شد — {tag}.")
+    # in_progress/failed → گارد ست نمی‌شود؛ دورِ بعد پس از انقضای lease دوباره تلاش می‌شود.
 
 
 async def _send_managers(bot, text):
@@ -1452,12 +1772,13 @@ async def maybe_send_perf_when_complete(bot):
     workers, _r, _o = _workers_and_reports(day)
     if not workers or workers_without_report(day):  # هنوز همه برای این روز گزارش نداده‌اند
         return
-    try:
-        await _send_managers(bot, daily_perf_text(day))
-        db.set_meta("last_perf_report", day)  # فقط پس از ارسالِ موفق
-        print(f"[worktasks] همه گزارش دادند ({day}) → کارتِ عملکرد به مدیران ارسال شد.")
-    except Exception as e:  # noqa: BLE001
-        print(f"[worktasks] گزارشِ عملکردِ رویدادی ناموفق: {e!r}")
+    # رفعِ D-RG-01: الگوی امنِ مشترک (کلیدِ مشترکِ perf:day با maybe_manager_report). گارد فقط پس از ارسالِ قطعی/duplicate.
+    status = await _guarded_send(f"perf:{day}", "manager_perf", lambda: _send_managers(bot, daily_perf_text(day)))
+    if status in ("sent", "duplicate", "skip_permanent"):
+        db.set_meta("last_perf_report", day)
+        if status == "sent":
+            print(f"[worktasks] همه گزارش دادند ({day}) → کارتِ عملکرد به مدیران ارسال شد.")
+    # in_progress/failed → گارد ست نمی‌شود؛ دورِ بعد پس از انقضای lease دوباره تلاش می‌شود.
 
 
 async def cmd_perf(update, context):
@@ -1580,6 +1901,7 @@ _CRAWL_TTL_DAYS = 3          # تسکِ بازِ خزشِ کهنه‌تر از �
 _WORSEN_FACTOR = 1.5         # اگر متریک ≥۱.۵ برابر و…
 _WORSEN_MIN_DELTA = 3        # …حداقل ۳ واحد بدتر شد → تسک رفرش/هشدار
 _RECUR_DAYS = 2             # مشکل ظرفِ این مدت پس از done دوباره پیدا شد → «حل نشده»
+_DONE_HOLD_DAYS = 3650      # تسکِ «انجام‌شده» تا این مدت دوباره ساخته نمی‌شود (خواستهٔ مالک: تکرار نشود)
 
 
 async def _run_crawl(actor_id, actor_name):
@@ -1613,8 +1935,13 @@ async def _run_crawl(actor_id, actor_name):
     assigned_lines, pending_lines, n_new = [], [], 0
     if fresh:
         staff = _staff_roles()
-        routes = (await wt_brain.route_issues([{"key": i["key"], "text": i["text"]} for i in fresh],
-                                              [{"name": n, "role": d} for _u, n, d in staff]) if staff else [])
+        det = _deterministic_route(fresh, staff) if staff else {}      # اساینِ قطعیِ بدونِ LLM
+        llm_fresh = [i for i in fresh if i["key"] not in det]          # فقط مبهم‌ها → LLM
+        routes = (await wt_brain.route_issues([{"key": i["key"], "text": i["text"]} for i in llm_fresh],
+                                              [{"name": n, "role": d} for _u, n, d in staff])
+                  if (staff and llm_fresh) else [])
+        print(f"[crawl-route] deterministic={len(det)} llm_fallback={len(llm_fresh)} "
+              f"llm_call={1 if (staff and llm_fresh) else 0}")
         name2uid = {n: u for u, n, d in staff}
         by_key = {i["key"]: i for i in fresh}
         done_keys = set()
@@ -1625,22 +1952,25 @@ async def _run_crawl(actor_id, actor_name):
             if not issue or key in done_keys:
                 return
             done_keys.add(key)
-            if _recent_done_crawl_key(key, _RECUR_DAYS * 86400):
-                txt = "⚠️ دوباره ظاهر شد (قبلاً حل‌شده علامت خورده بود) — " + txt
+            if _recent_done_crawl_key(key, _DONE_HOLD_DAYS * 86400):
+                return   # قبلاً «انجام‌شده» علامت خورده — دوباره ساخته نشود (خواستهٔ مالک)
             if assignee and assignee in name2uid:
                 tid = _add_task(name2uid[assignee], assignee, actor_id, actor_name, txt,
-                                source_key=key, metric=issue.get("metric"))
+                                source_key=key, metric=issue.get("metric"), kind="crawl")
                 if tid != -1:
                     n_new += 1
                     assigned_lines.append(f"• {html.escape(txt)} → <b>{html.escape(assignee)}</b>")
             else:
-                tid = _add_task(0, "—", actor_id, actor_name, txt, source_key=key, metric=issue.get("metric"))
+                tid = _add_task(0, "—", actor_id, actor_name, txt, source_key=key,
+                                metric=issue.get("metric"), kind="crawl")
                 if tid != -1:
                     n_new += 1
                     pending_lines.append(f"• {html.escape(txt)}")
 
+        for key, assignee in det.items():  # اول اساین‌های قطعی (بدونِ LLM؛ متنِ خامِ مشکل، مثلِ مسیرِ بی‌مسئول)
+            _make(key, by_key.get(key, {}).get("text") or "", assignee)
         for a in routes:
-            k = a.get("key") or _match_key(a.get("task_text", ""), fresh)
+            k = a.get("key") or _match_key(a.get("task_text", ""), llm_fresh)
             _make(k, a.get("task_text") or (by_key.get(k, {}).get("text") or ""), a.get("assignee"))
         for i in fresh:  # هر مشکلی که AI برنگرداند → تسکِ بی‌مسئول (تا dedup پوششش دهد)
             _make(i["key"], i["text"], "")
@@ -1702,6 +2032,8 @@ async def maybe_auto_crawl(app):
 
     ضدبلاک: فقط یک‌بار در روز و از همان کلاینت‌های ملایمِ خزش (که به circuit-breaker احترام می‌گذارند).
     """
+    if not getattr(config, "WT_AUTO_TASKS_ENABLED", False):   # فعلاً تسکِ خودکار ساخته نشود (فقط گزارشِ کار)
+        return
     import poller
     now = clock.tehran_now()
     if not poller._in_shift(now) or _is_holiday(now.strftime("%Y-%m-%d")):
@@ -1879,13 +2211,19 @@ def _day_task_text(d) -> str:
 
 
 def _close_prev_igplan_tasks(ig_uid) -> int:
-    """تسک‌های بازِ پلنِ محتواییِ قبلِ همین ادمین را می‌بندد تا هفته‌به‌هفته انباشته نشوند."""
+    """تسک‌های بازِ پلنِ محتواییِ قبلِ همین ادمین را (از طریقِ سرویس، با audit) می‌بندد تا انباشته نشوند."""
+    # D-08: طبقه‌بندی از ستونِ task_kind='ig_plan'؛ برای رکوردهای legacy (task_kind IS NULL) fallbackِ محدود
+    # و read-only به همان assigner_name LIKE — تا رکوردهای قدیمی هم درست بسته شوند بدونِ backfillِ production.
     with db._lock:
-        cur = db._conn.execute(
-            "UPDATE wt_tasks SET status='done', done_ts=? WHERE assignee_id=? AND status='open' "
-            "AND assigner_name LIKE '%محتوا%'", (time.time(), int(ig_uid)))
-        db._conn.commit()
-        return cur.rowcount
+        rows = db._conn.execute(
+            "SELECT id FROM wt_tasks WHERE assignee_id=? AND status='open' AND "
+            "(task_kind='ig_plan' OR (task_kind IS NULL AND assigner_name LIKE '%محتوا%'))",
+            (int(ig_uid),)).fetchall()
+    n = 0
+    for (tid,) in rows:
+        if taskservice.mark_done(taskservice.system_context("task_mark_done"), tid).status == "applied":
+            n += 1
+    return n
 
 
 def _chunk_html(text, limit=3800):
@@ -1902,11 +2240,19 @@ def _chunk_html(text, limit=3800):
     return chunks or [""]
 
 
-async def _reply_tasks(target, rows):
-    """لیستِ تسک‌ها را (در صورتِ بلندبودن — مثلِ پلنِ روزانه) چند‌تکه می‌فرستد؛ کیبوردِ «انجام شد» روی تکهٔ آخر."""
-    chunks = _chunk_html(_tasks_text(rows))
+async def _reply_tasks(target, rows, user_id=None):
+    """لیستِ تسک‌ها را (در صورتِ بلندبودن) چند‌تکه می‌فرستد؛ کیبورد روی تکهٔ آخر.
+
+    اگر چرخه روشن باشد و user_id داده شود، نمای چرخه (شروع/مسدود/ادامه/انجام) نشان داده می‌شود؛ وگرنه نمای legacy."""
+    if _lc_enabled() and user_id is not None:
+        lc_rows = _lc_open_tasks(user_id)
+        chunks = _chunk_html(_lc_tasks_text(lc_rows))
+        kb_last = _lc_tasks_kb(lc_rows)
+    else:
+        chunks = _chunk_html(_tasks_text(rows))
+        kb_last = _tasks_kb(rows)
     for i, ch in enumerate(chunks):
-        kb = _tasks_kb(rows) if i == len(chunks) - 1 else None
+        kb = kb_last if i == len(chunks) - 1 else None
         try:
             await target.reply_text(ch, parse_mode=ParseMode.HTML, reply_markup=kb)
         except Exception:  # noqa: BLE001
@@ -1964,7 +2310,7 @@ async def cmd_igplan(update, context):
     days = _days_until_friday(clock.tehran_now())
     wait = await msg.reply_text(f"📅 در حال ساختِ برنامهٔ محتواییِ کامل از «{days[0]}» تا «جمعه» "
                                 "(با ≥۱۰ استوریِ روزانه)… لطفاً ~۲ تا ۳ دقیقه صبر کن.")
-    plan, made = await _build_and_assign_igplan(user.id, days)
+    plan, made = await _build_and_assign_igplan(user.id, days, feature="ig_content_plan_ondemand")
     if not plan:
         await wait.edit_text("ساختِ برنامه فعلاً ممکن نشد (آنالیز/مغزِ AI پاسخ نداد). کمی بعد دوباره بزن.")
         return
@@ -1981,10 +2327,11 @@ async def cmd_igplan(update, context):
             pass
 
 
-async def _build_and_assign_igplan(actor_id, days):
+async def _build_and_assign_igplan(actor_id, days, feature="ig_content_plan"):
     """پلنِ روزآگاه می‌سازد، مدل‌ها را ذخیره می‌کند و تسکِ روزانهٔ ریز به ادمینِ پیج می‌سپارد (با بستنِ پلنِ قبل).
 
     خروجی: (plan یا None، تعدادِ تسکِ روزانه). مشترکِ /igplan و خزشِ خودکارِ شنبه.
+    feature: تفکیکِ هزینه بینِ on-demand (/igplan) و scheduled (خودکارِ شنبه).
     """
     r = await igstats.summary()
     if not r.get("ok"):
@@ -1992,7 +2339,7 @@ async def _build_and_assign_igplan(actor_id, days):
     inventory = await igstats.instock_by_brand()               # از سایت است، مستقلِ IG (تعداد≥۱، چرخشی)
     rivals_brief = igstats.rivals_brief_stored()                # از اسنپ‌شاتِ ذخیره‌شده (سریع)
     covered = " | ".join(db.last_plan_models(14))               # عدمِ تکرارِ مدل‌های اخیر
-    plan = await wt_brain.ig_content_plan(r, inventory, rivals_brief, covered, days)
+    plan = await wt_brain.ig_content_plan(r, inventory, rivals_brief, covered, days, feature=feature)
     cal = (plan or {}).get("calendar") or []
     if not cal:
         return None, 0
@@ -2005,7 +2352,7 @@ async def _build_and_assign_igplan(actor_id, days):
         _close_prev_igplan_tasks(ig_uid)                       # پلنِ قبل بسته می‌شود (انباشته نشود)
         ig_name = _staff_name(ig_uid) or "ادمینِ اینستاگرام"
         for d in cal:
-            _add_task(ig_uid, ig_name, actor_id, "🤖 مدیرِ محتوا", _day_task_text(d))
+            _add_task(ig_uid, ig_name, actor_id, "🤖 مدیرِ محتوا", _day_task_text(d), kind="ig_plan")
             made += 1
     return plan, made
 
@@ -2052,6 +2399,8 @@ async def maybe_ig_weekly(app):
 
 async def maybe_ig_autoplan(app):
     """شنبه‌ها یک‌بار: پلنِ کاملِ هفته را خودکار می‌سازد، تسکِ روزانه به ادمینِ پیج می‌سپارد و خلاصه به مدیران."""
+    if not getattr(config, "WT_AUTO_TASKS_ENABLED", False):   # فعلاً تسکِ خودکار ساخته نشود
+        return
     if not igstats.enabled() or not wt_brain.enabled():
         return
     import poller
@@ -2183,3 +2532,851 @@ async def cmd_linkwp(update, context):
     await msg.reply_text(
         f"کدام کاربرِ وردپرس به «{target[1]}» وصل شود؟ انتخاب کن:",
         reply_markup=InlineKeyboardMarkup(rows))
+
+
+# ============================================================
+# نسخهٔ عملیاتیِ اصلی — چرخهٔ تسک، صحت‌سنجی، تسکِ سایت/اینستاگرام، گزارش (Core Operational Release)
+# همه پشتِ feature flag؛ flag خاموش = رفتارِ دقیقاً فعلی (open/done). taskservice تنها نویسنده می‌ماند.
+# ============================================================
+import wt_verify  # noqa: E402
+
+
+def _lc_enabled() -> bool:
+    return bool(getattr(config, "WT_LIFECYCLE_ENABLED", False))
+
+
+def _website_assignee() -> int:
+    """مسئولِ سایت: اول configِ قطعی (WT_WEBSITE_ASSIGNEE_ID)، وگرنه fallbackِ metaِ موجود (اولین wp_link‌شده)."""
+    cid = int(getattr(config, "WT_WEBSITE_ASSIGNEE_ID", 0) or 0)
+    if cid:
+        return cid
+    with db._lock:  # fallback: تنها پرسنلِ لینک‌شده به وردپرس (اگر یکی بود)
+        rows = db._conn.execute("SELECT key FROM meta WHERE key LIKE 'wp_link:%'").fetchall()
+    if len(rows) == 1:
+        try:
+            return int(rows[0][0].split(":", 1)[1])
+        except (ValueError, IndexError):
+            return 0
+    return 0
+
+
+def _instagram_assignee() -> int:
+    """مسئولِ اینستاگرام: اول configِ قطعی (WT_INSTAGRAM_ASSIGNEE_ID)، وگرنه fallbackِ metaِ موجود (ig_admin_uid)."""
+    cid = int(getattr(config, "WT_INSTAGRAM_ASSIGNEE_ID", 0) or 0)
+    return cid or _ig_admin_uid()
+
+
+def _lifecycle_ctx(actor_id, operation, idem=""):
+    """MutationContext برای عملیاتِ چرخه؛ actor از تلگرام/سیستم (نه LLM)."""
+    if not actor_id:
+        return taskservice.system_context(operation, idempotency_key=idem)
+    return taskservice.MutationContext(actor_id=int(actor_id), actor_role=_role_of(actor_id), source="telegram",
+                                       operation=operation, idempotency_key=idem)
+
+
+_INACTIVE = taskservice.MutationResult("unauthorized", detail="inactive personnel")
+
+
+# ---------- اکشن‌های پرسنل روی تسکِ خودش ----------
+def lifecycle_start(task_id, actor_id, idem=""):
+    if _staff_blocked(actor_id):
+        return _INACTIVE
+    ctx = _lifecycle_ctx(actor_id, "task_transition", idem or f"tg:start:{actor_id}:{task_id}")
+    return taskservice.transition_task(ctx, task_id, "in_progress")
+
+
+def lifecycle_block(task_id, actor_id, reason, idem=""):
+    if _staff_blocked(actor_id):
+        return _INACTIVE
+    ctx = _lifecycle_ctx(actor_id, "task_transition", idem or f"tg:block:{actor_id}:{task_id}")
+    return taskservice.transition_task(ctx, task_id, "blocked", reason=reason)
+
+
+def lifecycle_resume(task_id, actor_id, idem=""):
+    if _staff_blocked(actor_id):
+        return _INACTIVE
+    ctx = _lifecycle_ctx(actor_id, "task_transition", idem or f"tg:resume:{actor_id}:{task_id}")
+    return taskservice.transition_task(ctx, task_id, "in_progress")
+
+
+def lifecycle_done(task_id, actor_id, note=None, idem=""):
+    """اعلامِ «انجام شد» توسطِ پرسنل. هدف بر اساسِ verification_mode: none→verified، manager/automatic→claimed."""
+    if _staff_blocked(actor_id):
+        return _INACTIVE, None
+    t = taskservice.get_task(task_id)
+    if not t:
+        return taskservice.MutationResult("not_found", task_id=task_id), None
+    target = taskservice.resolve_done_target(t["verification_mode"])
+    ctx = _lifecycle_ctx(actor_id, "task_transition", idem or f"tg:done:{actor_id}:{task_id}")
+    res = taskservice.transition_task(ctx, task_id, target, completion_note=note)
+    return res, target
+
+
+# ---------- اکشن‌های مدیر ----------
+def mgr_approve(task_id, actor_id, idem=""):
+    ctx = _lifecycle_ctx(actor_id, "task_transition", idem or f"tg:approve:{actor_id}:{task_id}")
+    return taskservice.transition_task(ctx, task_id, "verified_done")
+
+
+def mgr_reopen(task_id, actor_id, reason, idem=""):
+    ctx = _lifecycle_ctx(actor_id, "task_transition", idem or f"tg:reopen:{actor_id}:{task_id}")
+    return taskservice.transition_task(ctx, task_id, "reopened", reason=reason)
+
+
+def mgr_cancel(task_id, actor_id, reason, idem=""):
+    ctx = _lifecycle_ctx(actor_id, "task_transition", idem or f"tg:cancel:{actor_id}:{task_id}")
+    return taskservice.transition_task(ctx, task_id, "cancelled", reason=reason)
+
+
+def mgr_reassign(task_id, actor_id, new_uid, new_name, idem=""):
+    ctx = _lifecycle_ctx(actor_id, "task_reassign", idem or f"tg:reassign:{actor_id}:{task_id}:{new_uid}")
+    return taskservice.reassign_task(ctx, task_id, new_uid, new_name)
+
+
+def mgr_set_priority(task_id, actor_id, priority, idem=""):
+    ctx = _lifecycle_ctx(actor_id, "task_set_priority", idem or f"tg:prio:{actor_id}:{task_id}:{priority}")
+    return taskservice.set_priority(ctx, task_id, priority)
+
+
+def mgr_set_deadline(task_id, actor_id, deadline_ts, idem=""):
+    ctx = _lifecycle_ctx(actor_id, "task_set_deadline", idem or f"tg:dl:{actor_id}:{task_id}:{deadline_ts}")
+    return taskservice.set_deadline(ctx, task_id, deadline_ts)
+
+
+def mgr_set_vmode(task_id, actor_id, mode, idem=""):
+    ctx = _lifecycle_ctx(actor_id, "task_set_verification_mode", idem or f"tg:vm:{actor_id}:{task_id}:{mode}")
+    return taskservice.set_verification_mode(ctx, task_id, mode)
+
+
+# ---------- ساختِ تسکِ سایت/اینستاگرام (metadataِ ساختاریافته + idempotency) ----------
+def _feature_task(source_feature, assignee_id, assignee_name, assigner_id, text, *, mode, rule=None,
+                  priority="normal", deadline_ts=None, entity_type="", entity_id="", operation="",
+                  event_id="") -> int:
+    """ساختِ تسکِ staff با source_feature و (اختیاری) verify_rule. کلیدِ idempotency از entity+operation(+event).
+
+    خروجی: idِ تسک، یا -1 (dup/رد). rule اگر داده شود در کد allowlist می‌شود (نه LLM).
+    برای «رویدادِ واقعیِ جدید» پس از تکمیل/لغوِ تسکِ قبلی، event_idِ متفاوت بده تا تسکِ تازه ساخته شود."""
+    if rule is not None:
+        ok, err = wt_verify.validate_rule(rule)
+        if not ok:
+            print(f"[worktasks] verify_rule نامعتبر رد شد: {err}")
+            return -1
+    idem = f"{source_feature}:{entity_type}:{entity_id}:{operation}" + (f":{event_id}" if event_id else "")
+    ctx = taskservice.MutationContext(
+        actor_id=int(assigner_id) if assigner_id else taskservice.SYSTEM_ACTOR_ID,
+        actor_role=_role_of(assigner_id), source=("telegram" if assigner_id else "system"),
+        operation="task_create", idempotency_key=idem)
+    lc = "open" if _lc_enabled() else None
+    res = taskservice.create_task(
+        ctx, assignee_id, assignee_name, "🤖 سیستم" if not assigner_id else _staff_name(assigner_id) or "مدیر", text,
+        source_key=idem, task_kind="staff", lifecycle_state=lc, verification_mode=mode, priority=priority,
+        deadline_ts=deadline_ts, source_feature=source_feature,
+        verify_rule_json=wt_verify.dumps_rule(rule) if rule else None)
+    if res.status in ("applied",) or (res.status == "duplicate" and res.task_id):
+        return res.task_id
+    return -1
+
+
+def create_website_task(text, *, entity_type, entity_id, operation, verify_rule=None, mode="manager",
+                        priority="normal", deadline_ts=None, assignee_id=None, assigner_id=None,
+                        event_id="") -> int:
+    """تسکِ مرتبط با سایت برای «مسئولِ سایت». source_feature=website. metadataِ entity + ruleِ allowlist."""
+    if not getattr(config, "WT_WEBSITE_TASKS_ENABLED", False):
+        return -1
+    aid = assignee_id or _website_assignee()
+    if not aid:
+        print("[worktasks] مسئولِ سایت map نشده — تسکِ سایت ساخته نشد.")
+        return -1
+    if mode == "automatic" and not getattr(config, "WT_AUTOMATIC_VERIFICATION_ENABLED", False):
+        mode = "manager"  # صحت‌سنجیِ خودکار خاموش → به تأییدِ مدیر برگرد (رد/گم نمی‌شود)
+    return _feature_task("website", aid, _staff_name(aid) or "مسئولِ سایت", assigner_id, text,
+                         mode=mode, rule=verify_rule, priority=priority, deadline_ts=deadline_ts,
+                         entity_type=entity_type, entity_id=entity_id, operation=operation, event_id=event_id)
+
+
+def create_instagram_task(text, *, operation, entity_type="ig", entity_id="", verify_rule=None, mode="manager",
+                          priority="normal", deadline_ts=None, assignee_id=None, assigner_id=None,
+                          event_id="") -> int:
+    """تسکِ انسانیِ اینستاگرام برای «مسئولِ اینستاگرام». source_feature=instagram (جدا از ig_planِ سیستمی)."""
+    if not getattr(config, "WT_INSTAGRAM_TASKS_ENABLED", False):
+        return -1
+    aid = assignee_id or _instagram_assignee()
+    if not aid:
+        print("[worktasks] مسئولِ اینستاگرام map نشده — تسکِ اینستاگرام ساخته نشد.")
+        return -1
+    if mode == "automatic" and not getattr(config, "WT_AUTOMATIC_VERIFICATION_ENABLED", False):
+        mode = "manager"
+    return _feature_task("instagram", aid, _staff_name(aid) or "مسئولِ اینستاگرام", assigner_id, text,
+                         mode=mode, rule=verify_rule, priority=priority, deadline_ts=deadline_ts,
+                         entity_type=entity_type, entity_id=entity_id, operation=operation, event_id=event_id)
+
+
+# ---------- ارکستریشنِ صحت‌سنجیِ خودکار (خارج از تراکنش) ----------
+async def verify_and_apply(task_id, website=None, instagram=None) -> str:
+    """اگر تسک claimed_done با mode=automatic بود: API را خارج از تراکنش می‌خواند و نتیجهٔ قطعی را اعمال می‌کند.
+
+    positive → verified_done؛ negative/unavailable → همان claimed_done (رد/گم نمی‌شود). retry دوباره transition نمی‌سازد.
+    """
+    if not getattr(config, "WT_AUTOMATIC_VERIFICATION_ENABLED", False):
+        return "disabled"
+    t = taskservice.get_task(task_id)
+    if not t or t["state"] != "claimed_done" or t["verification_mode"] != "automatic":
+        return "skip"
+    rule = wt_verify.loads_rule(t["verify_rule_json"])
+    if not rule:
+        return "no_rule"
+    website = website or wt_verify.WebsiteAdapter()
+    instagram = instagram or wt_verify.InstagramAdapter()
+    res = await wt_verify.verify_rule(rule, website=website, instagram=instagram, cache={},
+                                      timeout=float(getattr(config, "WT_VERIFY_TIMEOUT_SEC", 8)))
+    if res.outcome == "positive":
+        ctx = taskservice.system_context("task_transition",
+                                         idempotency_key=f"verify:{task_id}:verified")
+        taskservice.transition_task(ctx, task_id, "verified_done",
+                                    verification_source=res.source, verification_ref=res.ref)
+        return "verified"
+    return res.outcome  # negative | unavailable → در claimed_done می‌ماند (مدیر می‌بیند)
+
+
+# ---------- parserهای قطعیِ deadline/priority (بدونِ LLM) ----------
+_PRIORITY_WORDS = {"normal": "normal", "عادی": "normal", "معمولی": "normal",
+                   "high": "high", "مهم": "high", "بالا": "high",
+                   "urgent": "urgent", "فوری": "urgent", "اورژانسی": "urgent"}
+
+
+def parse_priority(text):
+    return _PRIORITY_WORDS.get((text or "").strip().lower())
+
+
+def parse_deadline(text) -> float | None:
+    """ورودیِ سادهٔ فارسی/عددی → epochِ UTC (بر پایهٔ ساعتِ عملیاتیِ تهران). None اگر نامفهوم.
+
+    پشتیبانی: «امروز [HH:MM]»، «فردا [HH:MM]»، «YYYY/MM/DD [HH:MM]» (شمسی)، «+Nd»، «+Nh».
+    """
+    import datetime
+    s = (text or "").strip()
+    if not s:
+        return None
+    now = clock.tehran_now()
+    hh, mm = 23, 59
+
+    def _epoch(dt_tehran):
+        # تهران = UTC+3:30 → UTC epoch
+        return (dt_tehran - datetime.timedelta(hours=3, minutes=30)).replace(tzinfo=datetime.timezone.utc).timestamp()
+
+    m = None
+    parts = s.split()
+    # زمانِ اختیاری HH:MM در انتها
+    if parts and ":" in parts[-1]:
+        try:
+            hh, mm = (int(x) for x in parts[-1].split(":")[:2])
+            parts = parts[:-1]
+        except ValueError:
+            pass
+    head = " ".join(parts).strip()
+    if head in ("امروز", "today"):
+        base = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        return _epoch(base)
+    if head in ("فردا", "tomorrow"):
+        base = (now + datetime.timedelta(days=1)).replace(hour=hh, minute=mm, second=0, microsecond=0)
+        return _epoch(base)
+    if head.startswith("+") and head[1:-1].isdigit() and head[-1] in ("d", "h"):
+        n = int(head[1:-1])
+        delta = datetime.timedelta(days=n) if head[-1] == "d" else datetime.timedelta(hours=n)
+        return (clock.utcnow() + delta).replace(tzinfo=datetime.timezone.utc).timestamp()
+    if "/" in head:  # شمسی YYYY/MM/DD
+        try:
+            y, mo, d = (int(x) for x in head.split("/")[:3])
+            g = jdatetime.date(y, mo, d).togregorian()
+            base = datetime.datetime(g.year, g.month, g.day, hh, mm)
+            return _epoch(base)
+        except Exception:
+            return None
+    return None
+
+
+def is_overdue(t) -> bool:
+    """overdue یک محاسبهٔ derived است (نه state جدید): deadline گذشته و تسک هنوز terminal نشده."""
+    import datetime as _dt
+    dl = t.get("deadline_ts")
+    return bool(dl and dl < clock.utcnow().replace(tzinfo=_dt.timezone.utc).timestamp()
+                and t.get("state") not in taskservice.TERMINAL_STATES)
+
+
+# ---------- گزارشِ مدیریتیِ چرخه (deterministic؛ بدونِ LLM؛ بدونِ N+1) ----------
+_STATE_FA = {"open": "شروع‌نشده", "in_progress": "در حالِ انجام", "blocked": "مسدود",
+             "claimed_done": "منتظرِ تأیید", "verified_done": "تأییدشده", "reopened": "بازگشایی‌شده",
+             "cancelled": "لغوشده"}
+_SRC_FA = {"general": "عمومی", "website": "سایت", "instagram": "اینستاگرام"}
+
+
+def lifecycle_counts() -> dict:
+    """تجمیعِ قطعیِ تسک‌های staff بر پایهٔ چرخه: by_state, by_source, overdue, reopened, per_employee.
+
+    یک query، سپس projection در کد (بدونِ N+1، بدونِ AI). مبنای همهٔ شمارش‌ها lifecycle_of(state,status) است.
+    """
+    import datetime as _dt
+    nowe = clock.utcnow().replace(tzinfo=_dt.timezone.utc).timestamp()
+    with db._lock:
+        rows = db._conn.execute(
+            "SELECT assignee_id, assignee_name, status, lifecycle_state, deadline_ts, source_feature, "
+            "reopened_count, started_ts, claimed_done_ts, verified_ts "
+            "FROM wt_tasks WHERE COALESCE(task_kind,'staff')='staff'").fetchall()
+    by_state = {s: 0 for s in taskservice.LIFECYCLE_STATES}
+    by_source = {s: 0 for s in taskservice.SOURCE_FEATURES}
+    overdue = 0
+    per_emp: dict = {}
+    for aid, aname, status, lc, dl, src, reop, st_ts, cd_ts, vf_ts in rows:
+        state = taskservice.lifecycle_of(lc, status)
+        by_state[state] = by_state.get(state, 0) + 1
+        src = src or "general"
+        by_source[src] = by_source.get(src, 0) + 1
+        od = bool(dl and dl < nowe and state not in taskservice.TERMINAL_STATES)
+        if od:
+            overdue += 1
+        e = per_emp.setdefault(aid, {"name": aname, "active": 0, "completed": 0, "awaiting": 0,
+                                     "overdue": 0, "reopened": 0, "start_to_claim": [], "claim_to_verify": []})
+        if state in taskservice.TERMINAL_STATES:
+            if state == "verified_done":
+                e["completed"] += 1
+        else:
+            e["active"] += 1
+        if state == "claimed_done":
+            e["awaiting"] += 1
+        if od:
+            e["overdue"] += 1
+        e["reopened"] += int(reop or 0)
+        if st_ts and cd_ts and cd_ts >= st_ts:
+            e["start_to_claim"].append(cd_ts - st_ts)
+        if cd_ts and vf_ts and vf_ts >= cd_ts:
+            e["claim_to_verify"].append(vf_ts - cd_ts)
+    return {"by_state": by_state, "by_source": by_source, "overdue": overdue, "per_employee": per_emp}
+
+
+def lifecycle_report_text() -> str:
+    """کارتِ مدیریتیِ وضعیتِ واقعیِ کارها (بدونِ AI). گزارش بدونِ AI هم کامل و قابلِ استفاده است."""
+    c = lifecycle_counts()
+    bs, bsrc = c["by_state"], c["by_source"]
+    lines = ["📋 <b>وضعیتِ کارها (چرخهٔ عملیاتی)</b>", ""]
+    order = ["open", "in_progress", "blocked", "claimed_done", "reopened", "verified_done", "cancelled"]
+    lines.append("• " + " · ".join(f"{_STATE_FA[s]}: {_fa(bs.get(s, 0))}" for s in order))
+    lines.append(f"• ⏰ overdue: {_fa(c['overdue'])}")
+    lines.append("• منابع → " + " · ".join(f"{_SRC_FA.get(s, s)}: {_fa(bsrc.get(s, 0))}" for s in
+                                            ("general", "website", "instagram")))
+    lines.append("")
+    for aid, e in sorted(c["per_employee"].items(), key=lambda kv: -(kv[1]["active"] + kv[1]["awaiting"])):
+        if not (e["active"] or e["awaiting"] or e["completed"] or e["overdue"]):
+            continue
+        seg = (f"👤 <b>{html.escape(e['name'] or str(aid))}</b> — فعال {_fa(e['active'])} · "
+               f"منتظرِ تأیید {_fa(e['awaiting'])} · تکمیل {_fa(e['completed'])} · "
+               f"overdue {_fa(e['overdue'])} · بازگشایی {_fa(e['reopened'])}")
+        lines.append(seg)
+    return "\n".join(lines)
+
+
+def pending_approval_text() -> str:
+    """فهرستِ تسک‌های منتظرِ تأییدِ مدیر (claimed_done)."""
+    with db._lock:
+        rows = db._conn.execute(
+            "SELECT id, assignee_name, text, source_feature, verification_source, verification_ref "
+            "FROM wt_tasks WHERE lifecycle_state='claimed_done' ORDER BY claimed_done_ts").fetchall()
+    if not rows:
+        return "✅ هیچ تسکی منتظرِ تأیید نیست."
+    lines = ["🕵️ <b>منتظرِ تأییدِ مدیر</b>", ""]
+    for tid, aname, text, src, vsrc, vref in rows:
+        tag = f" [{_SRC_FA.get(src, src)}]" if src and src != "general" else ""
+        vr = f" · صحت‌سنجی: {html.escape(vref)}" if vref else ""
+        lines.append(f"• <code>#{tid}</code>{tag} {html.escape((text or '')[:60])} — {html.escape(aname or '')}{vr}")
+    lines.append("\n<i>تأیید: /approve id · بازگشایی: /reopen id دلیل · لغو: /cancel id دلیل</i>")
+    return "\n".join(lines)
+
+
+# ---------- نوتیفیکیشنِ چرخه (WS19): مستقل از تراکنش، delivery ledger، پیش‌فرض خاموش ----------
+async def notify_transition(bot, task_id, event, text):
+    """پیامِ چرخه را ایمن می‌فرستد: کلیدِ منطقیِ ثابت، از delivery ledger، بدونِ meta-set قبل از send (ضدِ D-RG-01).
+
+    شکستِ ارسال، state را rollback نمی‌کند (transition جدا از send است). پیش‌فرض خاموش تا فعال‌سازیِ صریح."""
+    if not getattr(config, "WT_NEW_NOTIFICATIONS_ENABLED", False) or not bot:
+        return
+    group = _workgroup()
+    if not group:
+        return
+    # همان الگوی امنِ مشترکِ D-RG-01؛ transition جدا از send است و شکستِ ارسال state را برنمی‌گرداند.
+    await _guarded_send(f"wt_notif:{task_id}:{event}", "wt_transition_notif",
+                        lambda: bot.send_message(group, text, parse_mode=ParseMode.HTML))
+
+
+# ---------- دستورهای مدیر (deterministic؛ بدونِ LLM) ----------
+def _args(msg):
+    return (msg.text or "").split()[1:]
+
+
+def _need_admin_lc(user):
+    return _lc_enabled() and user and _is_admin(user.id)
+
+
+async def cmd_approve(update, context):
+    """/approve <id> — تأییدِ انجامِ تسک (claimed_done → verified_done). فقط مدیر."""
+    msg, user = update.effective_message, update.effective_user
+    if not msg or not _need_admin_lc(user):
+        return
+    a = _args(msg)
+    if not a or not a[0].lstrip("#").isdigit():
+        await msg.reply_text("فرمت: /approve <شمارهٔ تسک>")
+        return
+    tid = int(a[0].lstrip("#"))
+    res = mgr_approve(tid, user.id)
+    await msg.reply_text("✅ تأیید شد." if res.status == "applied"
+                         else ("قبلاً تأیید شده." if res.status == "noop" else f"انجام نشد ({res.status}: {res.detail})."))
+
+
+async def cmd_reopen(update, context):
+    """/reopen <id> <دلیل> — بازگشاییِ تسکِ رد‌شده. فقط مدیر."""
+    msg, user = update.effective_message, update.effective_user
+    if not msg or not _need_admin_lc(user):
+        return
+    a = _args(msg)
+    if len(a) < 2 or not a[0].lstrip("#").isdigit():
+        await msg.reply_text("فرمت: /reopen <شماره> <دلیل>")
+        return
+    res = mgr_reopen(int(a[0].lstrip("#")), user.id, " ".join(a[1:]))
+    await msg.reply_text("🔄 بازگشایی شد." if res.status == "applied" else f"انجام نشد ({res.status}: {res.detail}).")
+
+
+async def cmd_cancel(update, context):
+    """/cancel <id> <دلیل> — لغوِ تسک. فقط مدیر."""
+    msg, user = update.effective_message, update.effective_user
+    if not msg or not _need_admin_lc(user):
+        return
+    a = _args(msg)
+    if len(a) < 2 or not a[0].lstrip("#").isdigit():
+        await msg.reply_text("فرمت: /cancel <شماره> <دلیل>")
+        return
+    res = mgr_cancel(int(a[0].lstrip("#")), user.id, " ".join(a[1:]))
+    await msg.reply_text("🚫 لغو شد." if res.status == "applied" else f"انجام نشد ({res.status}: {res.detail}).")
+
+
+async def cmd_reassign(update, context):
+    """/reassign <id> (ریپلای/منشنِ فرد) — واگذاریِ مجدد. فقط مدیر."""
+    msg, user = update.effective_message, update.effective_user
+    if not msg or not _need_admin_lc(user):
+        return
+    a = _args(msg)
+    if not a or not a[0].lstrip("#").isdigit():
+        await msg.reply_text("فرمت: /reassign <شماره> + منشن/ریپلایِ فردِ جدید")
+        return
+    tgt = _resolve_target(msg, " ".join(a[1:]))
+    if not tgt:
+        await msg.reply_text("فردِ جدید را با منشن یا ریپلای مشخص کن.")
+        return
+    _seen_id(tgt[0], tgt[1])
+    res = mgr_reassign(int(a[0].lstrip("#")), user.id, tgt[0], tgt[1])
+    await msg.reply_text(f"↪️ به {tgt[1]} واگذار شد." if res.status == "applied"
+                         else f"انجام نشد ({res.status}: {res.detail}).")
+
+
+async def cmd_deadline(update, context):
+    """/deadline <id> <امروز|فردا|YYYY/MM/DD [HH:MM]|+Nd|+Nh> — مهلت. فقط مدیر."""
+    msg, user = update.effective_message, update.effective_user
+    if not msg or not _need_admin_lc(user):
+        return
+    a = _args(msg)
+    if len(a) < 2 or not a[0].lstrip("#").isdigit():
+        await msg.reply_text("فرمت: /deadline <شماره> <امروز|فردا|۱۴۰۴/۰۵/۰۱ [۱۸:۰۰]|+۲d>")
+        return
+    dl = parse_deadline(" ".join(a[1:]))
+    if dl is None:
+        await msg.reply_text("زمان نامفهوم بود.")
+        return
+    res = mgr_set_deadline(int(a[0].lstrip("#")), user.id, dl)
+    await msg.reply_text("⏰ مهلت ثبت شد." if res.status == "applied" else f"انجام نشد ({res.status}).")
+
+
+async def cmd_priority(update, context):
+    """/priority <id> <عادی|مهم|فوری> — اولویت. فقط مدیر."""
+    msg, user = update.effective_message, update.effective_user
+    if not msg or not _need_admin_lc(user):
+        return
+    a = _args(msg)
+    p = parse_priority(a[1]) if len(a) >= 2 else None
+    if len(a) < 2 or not a[0].lstrip("#").isdigit() or not p:
+        await msg.reply_text("فرمت: /priority <شماره> <عادی|مهم|فوری>")
+        return
+    res = mgr_set_priority(int(a[0].lstrip("#")), user.id, p)
+    await msg.reply_text("🎚️ اولویت ثبت شد." if res.status == "applied" else f"انجام نشد ({res.status}).")
+
+
+async def cmd_vmode(update, context):
+    """/vmode <id> <none|manager|automatic> — حالتِ صحت‌سنجی. فقط مدیر."""
+    msg, user = update.effective_message, update.effective_user
+    if not msg or not _need_admin_lc(user):
+        return
+    a = _args(msg)
+    if len(a) < 2 or not a[0].lstrip("#").isdigit() or a[1] not in taskservice.VERIFICATION_MODES:
+        await msg.reply_text("فرمت: /vmode <شماره> <none|manager|automatic>")
+        return
+    mode = a[1]
+    if mode == "automatic" and not getattr(config, "WT_AUTOMATIC_VERIFICATION_ENABLED", False):
+        await msg.reply_text("صحت‌سنجیِ خودکار (flag) خاموش است.")
+        return
+    res = mgr_set_vmode(int(a[0].lstrip("#")), user.id, mode)
+    await msg.reply_text("🔧 حالتِ صحت‌سنجی ثبت شد." if res.status == "applied" else f"انجام نشد ({res.status}).")
+
+
+async def cmd_pending(update, context):
+    """/pending — تسک‌های منتظرِ تأیید. فقط مدیر."""
+    msg, user = update.effective_message, update.effective_user
+    if not msg or not _need_admin_lc(user):
+        return
+    await msg.reply_text(pending_approval_text(), parse_mode=ParseMode.HTML)
+
+
+async def cmd_lcreport(update, context):
+    """/board — کارتِ وضعیتِ چرخهٔ کارها. فقط مدیر."""
+    msg, user = update.effective_message, update.effective_user
+    if not msg or not _need_admin_lc(user):
+        return
+    await msg.reply_text(lifecycle_report_text(), parse_mode=ParseMode.HTML)
+
+
+# ============================================================
+# مدیریتِ سادهٔ پرسنل + حضور + حقوق (Core HR) — همه پشتِ flag، دستورهای مدیر
+# ============================================================
+_pending_salary: dict = {}  # actor_id → {pid, name, method, amount}
+
+
+def _is_primary_admin(uid) -> bool:
+    pid = getattr(config, "WT_PRIMARY_ADMIN_ID", 0)
+    return (int(uid) == int(pid)) if pid else _is_admin(uid)
+
+
+def _hr_admin(user) -> bool:
+    return bool(getattr(config, "WT_PERSONNEL_ENABLED", False) and user and _is_admin(user.id))
+
+
+def _payroll_pv(msg, user) -> bool:
+    # وابستگی: payroll بدونِ personnel فعال نمی‌شود (fail-closed). فقط پیویِ مدیرِ اصلی.
+    return bool(getattr(config, "WT_SIMPLE_PAYROLL_ENABLED", False) and getattr(config, "WT_PERSONNEL_ENABLED", False)
+                and user and _is_primary_admin(user.id)
+                and msg and getattr(getattr(msg, "chat", None), "type", "") == "private")
+
+
+def _resolve_personnel_arg(arg):
+    a = (arg or "").strip().lstrip("#")
+    if a.isdigit():
+        return wt_hr.get_personnel(int(a))
+    ms = wt_hr.find_personnel_by_name(a)
+    return ms[0] if len(ms) == 1 else None
+
+
+async def cmd_personnel(update, context):
+    """/personnel — فهرستِ پرسنل (فقط مدیر)."""
+    msg, user = update.effective_message, update.effective_user
+    if not msg or not _hr_admin(user):
+        return
+    rows = wt_hr.list_personnel()
+    if not rows:
+        await msg.reply_text("هنوز پرسنلی ثبت نشده. با /addstaff اضافه کن.")
+        return
+    lines = ["👥 <b>پرسنل</b>", ""]
+    for p in rows:
+        st = "فعال ✅" if p["active"] else "غیرفعال ⛔"
+        sal = f" · {wt_hr.method_fa(p['salary_method'])}" if p["salary_method"] else ""
+        lines.append(f"• <code>#{p['id']}</code> {html.escape(p['name'])} — {st}"
+                     + (f" · {html.escape(p['title'])}" if p["title"] else "") + sal)
+    await msg.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+async def cmd_addstaff(update, context):
+    """/addstaff نام — افزودنِ پرسنل (اختیاری: ریپلای/منشن برای اتصالِ تلگرام)."""
+    msg, user = update.effective_message, update.effective_user
+    if not msg or not _hr_admin(user):
+        return
+    a = _args(msg)
+    if not a:
+        await msg.reply_text("فرمت: /addstaff نامِ پرسنل  (برای اتصالِ تلگرام، روی پیامِ او ریپلای کن یا منشن بزن)")
+        return
+    name = " ".join(a)
+    tgt = _resolve_target(msg, "")
+    tg_uid = tgt[0] if tgt else None
+    pid = wt_hr.add_personnel(user.id, name, tg_user_id=tg_uid)
+    if pid > 0:
+        await msg.reply_text(f"✅ پرسنل «{html.escape(name)}» با شناسهٔ <code>#{pid}</code> اضافه شد"
+                             + (f" و به تلگرامِ {tgt[1]} وصل شد." if tgt else "."), parse_mode=ParseMode.HTML)
+    else:
+        await msg.reply_text("افزودن ناموفق بود (نام خالی؟).")
+
+
+async def cmd_editstaff(update, context):
+    """/editstaff <id> <name|title> <مقدار> — ویرایشِ نام یا بخش."""
+    msg, user = update.effective_message, update.effective_user
+    if not msg or not _hr_admin(user):
+        return
+    a = _args(msg)
+    if len(a) < 3 or not a[0].lstrip("#").isdigit() or a[1] not in ("name", "title", "نام", "بخش"):
+        await msg.reply_text("فرمت: /editstaff <شماره> <name|title> <مقدار>")
+        return
+    pid = int(a[0].lstrip("#"))
+    val = " ".join(a[2:])
+    field = "name" if a[1] in ("name", "نام") else "title"
+    ok = wt_hr.edit_personnel(user.id, pid, **{field: val})
+    await msg.reply_text("✅ ثبت شد." if ok else "پرسنل یافت نشد.")
+
+
+async def cmd_deactivatestaff(update, context):
+    """/deactivatestaff <id> — غیرفعال‌سازی (بدونِ حذفِ سخت؛ سابقه حفظ)."""
+    msg, user = update.effective_message, update.effective_user
+    if not msg or not _hr_admin(user):
+        return
+    a = _args(msg)
+    if not a or not a[0].lstrip("#").isdigit():
+        await msg.reply_text("فرمت: /deactivatestaff <شماره>")
+        return
+    pid = int(a[0].lstrip("#"))
+    p = wt_hr.get_personnel(pid)
+    if wt_hr.set_active(user.id, pid, False):
+        openrows = _open_tasks(p["tg_user_id"] or 0) if (p and p["tg_user_id"]) else []
+        tail = f"\n⚠️ {_fa(len(openrows))} تسکِ باز دارد که به مدیر نمایش داده می‌شود." if openrows else ""
+        await msg.reply_text(f"⛔ پرسنل <code>#{pid}</code> غیرفعال شد. تسکِ جدید نمی‌گیرد؛ سابقه حفظ شد.{tail}",
+                             parse_mode=ParseMode.HTML)
+    else:
+        await msg.reply_text("پرسنل یافت نشد.")
+
+
+async def cmd_activatestaff(update, context):
+    """/activatestaff <id> — فعال‌سازیِ مجدد."""
+    msg, user = update.effective_message, update.effective_user
+    if not msg or not _hr_admin(user):
+        return
+    a = _args(msg)
+    if not a or not a[0].lstrip("#").isdigit():
+        await msg.reply_text("فرمت: /activatestaff <شماره>")
+        return
+    ok = wt_hr.set_active(user.id, int(a[0].lstrip("#")), True)
+    await msg.reply_text("✅ فعال شد." if ok else "پرسنل یافت نشد.")
+
+
+async def _show_salary_confirm(msg, name, method, amount):
+    kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ تأیید", callback_data="wt:salok"),
+                                InlineKeyboardButton("✖️ لغو", callback_data="wt:salno")]])
+    label = "نرخِ هر ساعت" if method == "hourly" else "مبلغ"
+    await msg.reply_text(f"پرسنل: {html.escape(name)}\nروشِ محاسبه: {wt_hr.method_fa(method)}\n"
+                         f"{label}: {wt_hr.fmt_money(amount)}\nتأیید / لغو", reply_markup=kb)
+
+
+async def cmd_setsalary(update, context):
+    """/setsalary <id> <fixed_monthly|hourly> <مبلغ> — یا در پیوی «حقوق …». نیازمندِ تأییدِ مدیرِ اصلی."""
+    msg, user = update.effective_message, update.effective_user
+    if not msg:
+        return
+    if not _payroll_pv(msg, user):
+        await msg.reply_text("این دستور فقط در پیویِ مدیرِ اصلی و با فعال‌بودنِ حقوق کار می‌کند.")
+        return
+    a = _args(msg)
+    if len(a) >= 3 and a[0].lstrip("#").isdigit() and a[1] in wt_hr.SALARY_METHODS:
+        p = wt_hr.get_personnel(int(a[0].lstrip("#")))
+        amount = wt_hr.parse_money(" ".join(a[2:]))
+        if not p or amount is None:
+            await msg.reply_text("پرسنل یا مبلغ نامعتبر.")
+            return
+        _pending_salary[user.id] = {"pid": p["id"], "name": p["name"], "method": a[1], "amount": amount}
+        await _show_salary_confirm(msg, p["name"], a[1], amount)
+        return
+    await msg.reply_text("فرمت: /setsalary <شماره> <fixed_monthly|hourly> <مبلغ>\n"
+                         "یا در پیوی بنویس: «حقوق علی ماهی ۳۰ میلیون تومان»")
+
+
+async def cmd_setmonthhours(update, context):
+    """/setmonthhours [YYYY-MM شمسی] <ساعت> — ساعتِ مبنای ماه (حقوقِ ثابتِ تناسبی). فقط مدیرِ اصلی در پیوی."""
+    msg, user = update.effective_message, update.effective_user
+    if not msg or not _payroll_pv(msg, user):
+        return
+    a = _args(msg)
+    if not a:
+        await msg.reply_text("فرمت: /setmonthhours [۱۴۰۵-۰۴] <ساعت>  (مثلاً: /setmonthhours 192)")
+        return
+    month = wt_hr.current_jmonth()
+    if len(a) >= 2 and re.match(r"\d{3,4}-\d{1,2}", a[0].translate(_FA_NUM)):
+        month = a[0].translate(_FA_NUM)
+        hours = wt_hr.parse_money(a[1])
+    else:
+        hours = wt_hr.parse_money(a[-1])
+    if hours is None:
+        await msg.reply_text("ساعت نامعتبر.")
+        return
+    ok = wt_hr.set_month_base_hours(user.id, month, hours)
+    await msg.reply_text(f"✅ ساعتِ مبنای ماهِ {month} = {_fa(hours)} ثبت شد." if ok else "ثبت نشد.")
+
+
+async def cmd_attendance(update, context):
+    """/attendance <id|نام> [YYYY-MM شمسی] — خلاصهٔ حضورِ ماه. فقط مدیر."""
+    msg, user = update.effective_message, update.effective_user
+    if not msg or not _hr_admin(user):
+        return
+    a = _args(msg)
+    if not a:
+        await msg.reply_text("فرمت: /attendance <شماره|نام> [۱۴۰۵-۰۴]")
+        return
+    month = wt_hr.current_jmonth()
+    if len(a) >= 2 and re.match(r"\d{3,4}-\d{1,2}", a[-1].translate(_FA_NUM)):
+        month = a[-1].translate(_FA_NUM)
+        a = a[:-1]
+    p = _resolve_personnel_arg(" ".join(a))
+    if not p:
+        await msg.reply_text("پرسنل یافت نشد یا نام مبهم بود.")
+        return
+    if not p["tg_user_id"]:
+        await msg.reply_text(f"{html.escape(p['name'])} به تلگرام وصل نشده — داده حضور ندارد.")
+        return
+    s = wt_hr.month_summary(p["tg_user_id"], month)
+    await msg.reply_text(
+        f"🕒 <b>حضورِ {html.escape(p['name'])} — {month}</b>\n"
+        f"روزهای دارای حضور: {_fa(s['days'])}\nمجموعِ ساعتِ معتبر: {_fa(s['valid_hours'])}\n"
+        f"اولین ورود: {s['first_in'] or '—'}\nآخرین خروج: {s['last_out'] or '—'}\n"
+        f"ناقص (ورودِ بی‌خروج): {_fa(s['incomplete'])} · یتیم (خروجِ بی‌ورود): {_fa(s['orphan'])}",
+        parse_mode=ParseMode.HTML)
+
+
+def _payroll_text(pr) -> str:
+    p = pr["personnel"]
+    lines = [f"💰 <b>حقوقِ {html.escape(p['name'])} — {pr['month']}</b>", ""]
+    lines.append(f"روشِ حقوق: {wt_hr.method_fa(pr['method'])}")
+    lines.append(f"اولین ورود: {pr.get('first_in') or '—'} · آخرین خروج: {pr.get('last_out') or '—'}")
+    lines.append(f"روزهای دارای حضور: {_fa(pr['days'])} · مجموعِ ساعتِ معتبر: {_fa(pr['hours'])}")
+    lines.append(f"ناقص: {_fa(pr['incomplete'])} · یتیم: {_fa(pr['orphan'])}")
+    if pr["method"] == "hourly":
+        lines.append(f"نرخِ هر ساعت: {wt_hr.fmt_money(pr['amount'])}")
+    else:
+        lines.append(f"حقوقِ ثابت: {wt_hr.fmt_money(pr['amount'])}")
+        lines.append(f"ساعتِ مبنای ماه: {_fa(pr['base_hours']) if pr['base_hours'] else 'ثبت‌نشده'}")
+    if pr["status"] == "no_month_baseline":
+        lines.append("⚠️ ساعتِ مبنای ماه ثبت نشده — حقوقِ تناسبی محاسبه نشد (حقوقِ ثابت و ساعات جدا نمایش داده شد).")
+    elif pr["status"] == "no_attendance":
+        lines.append("⚠️ حضوری برای این ماه ثبت نشده.")
+    lines.append(f"مبلغِ محاسبه‌شده: {wt_hr.fmt_money(pr['computed'])}")
+    if pr["adjustment"]:
+        lines.append(f"اصلاحِ دستیِ مدیر: {wt_hr.fmt_money(pr['adjustment']['final_override'])} "
+                     f"(دلیل: {html.escape(pr['adjustment'].get('reason') or '')})")
+    lines.append(f"<b>مبلغِ نهایی: {wt_hr.fmt_money(pr['final'])}</b>")
+    return "\n".join(lines)
+
+
+async def cmd_payroll_summary(msg, month):
+    rows = wt_hr.list_personnel(active=True)
+    lines = [f"💰 <b>خلاصهٔ حقوقِ همه — {month}</b>", "", "نام | ساعت | روش | محاسبه‌شده | وضعیت"]
+    for p in rows:
+        pr = wt_hr.compute_payroll(p["id"], month)
+        lines.append(f"{html.escape(p['name'])} | {_fa(pr['hours'])} | {wt_hr.method_fa(pr['method'])} | "
+                     f"{wt_hr.fmt_money(pr['computed'])} | {pr['status']}")
+    await msg.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+async def cmd_payroll(update, context):
+    """/payroll [id|نام] [YYYY-MM شمسی] — گزارشِ حقوق. فقط مدیرِ اصلی در پیوی."""
+    msg, user = update.effective_message, update.effective_user
+    if not msg:
+        return
+    if not _payroll_pv(msg, user):
+        await msg.reply_text("گزارشِ حقوق فقط در پیویِ مدیرِ اصلی و با فعال‌بودنِ حقوق در دسترس است.")
+        return
+    a = _args(msg)
+    month = wt_hr.current_jmonth()
+    if a and re.match(r"\d{3,4}-\d{1,2}", a[-1].translate(_FA_NUM)):
+        month = a[-1].translate(_FA_NUM)
+        a = a[:-1]
+    if a:
+        p = _resolve_personnel_arg(" ".join(a))
+        if not p:
+            await msg.reply_text("پرسنل یافت نشد.")
+            return
+        await msg.reply_text(_payroll_text(wt_hr.compute_payroll(p["id"], month)), parse_mode=ParseMode.HTML)
+        return
+    await cmd_payroll_summary(msg, month)
+
+
+async def _hr_payroll_query(msg, user, text):
+    """پرسشِ طبیعیِ حقوق در پیوی: «حقوق این ماه علی» / «گزارش حقوق این ماه» / «ساعات حضور رضا»."""
+    month = wt_hr.current_jmonth()
+    p = None
+    for cand in wt_hr.list_personnel():
+        if cand["name"] and cand["name"] in text:
+            p = cand
+            break
+    if "حضور" in text or "ساعات" in text:
+        if not p or not p["tg_user_id"]:
+            await msg.reply_text("برای گزارشِ حضور، نامِ پرسنلِ متصل به تلگرام را مشخص کن.")
+            return
+        s = wt_hr.month_summary(p["tg_user_id"], month)
+        await msg.reply_text(f"🕒 حضورِ {html.escape(p['name'])} — {month}: {_fa(s['valid_hours'])} ساعت "
+                             f"({_fa(s['days'])} روز، ناقص {_fa(s['incomplete'])}، یتیم {_fa(s['orphan'])})",
+                             parse_mode=ParseMode.HTML)
+        return
+    if p:
+        await msg.reply_text(_payroll_text(wt_hr.compute_payroll(p["id"], month)), parse_mode=ParseMode.HTML)
+    else:
+        await cmd_payroll_summary(msg, month)
+
+
+async def maybe_hr_private(update, context) -> bool:
+    """پیویِ مدیرِ اصلی: «حقوق …» (ثبتِ حقوق یا پرسشِ گزارش). خروجی True اگر هندل شد."""
+    msg, user = update.effective_message, update.effective_user
+    if not msg or not user or getattr(getattr(msg, "chat", None), "type", "") != "private":
+        return False
+    if not _is_primary_admin(user.id) or not getattr(config, "WT_SIMPLE_PAYROLL_ENABLED", False):
+        return False
+    text = (msg.text or "").strip()
+    if not text.startswith("حقوق") and not text.startswith("ساعات حضور"):
+        return False
+    if text.startswith("ساعات حضور") or "گزارش" in text or "این ماه" in text or "حضور" in text:
+        await _hr_payroll_query(msg, user, text)
+        return True
+    r = wt_hr.parse_salary_command(text)
+    if not r.get("ok"):
+        await msg.reply_text("متوجهِ مبلغ نشدم. مثال: «حقوق علی ماهی ۳۰ میلیون تومان»")
+        return True
+    if not r["method"]:
+        await msg.reply_text("روشِ حقوق مشخص نیست؛ «ماهی/ثابت» یا «ساعتی» را بگو.")
+        return True
+    ms = wt_hr.find_personnel_by_name(r["name_hint"])
+    if len(ms) != 1:
+        await msg.reply_text(f"پرسنلِ «{html.escape(r['name_hint'])}» مبهم/نامشخص بود؛ دقیق‌تر بگو یا /personnel را ببین. "
+                             "چیزی ذخیره نشد.")
+        return True
+    p = ms[0]
+    _pending_salary[user.id] = {"pid": p["id"], "name": p["name"], "method": r["method"], "amount": r["amount"]}
+    await _show_salary_confirm(msg, p["name"], r["method"], r["amount"])
+    return True
+
+
+# ---------- قطعِ همکاریِ سبک (مستقل از HR flag؛ بادوام، برگشت‌پذیر، سابقه‌حفظ) ----------
+async def cmd_retire(update, context):
+    """/retire (ریپلای/منشن/نام) — قطعِ همکاری: نه تسکِ جدید، نه یادآوری، نه در کارتِ عملکرد. سابقه حفظ؛ بازگشت با /unretire."""
+    msg, user = update.effective_message, update.effective_user
+    if not msg or not user or not _is_admin(user.id):
+        return
+    tgt = _resolve_target(msg, " ".join(_args(msg)))
+    if not tgt:
+        await msg.reply_text("فردِ موردِ نظر را مشخص کن: روی پیامش ریپلای کن، یا «/retire @username» یا «/retire نام».")
+        return
+    uid, name = tgt
+    _set_retired(user.id, uid, name, True)
+    openrows = _open_tasks(uid)
+    tail = (f"\n⚠️ <b>{_fa(len(openrows))} تسکِ باز</b> دارد؛ با /pending یا /tasks ببین و در صورتِ نیاز واگذار/ببند "
+            f"(تسک‌ها خودکار بسته نشدند تا چیزی گم نشود)." if openrows else "")
+    await msg.reply_text(
+        f"⛔ «{html.escape(name)}» قطعِ همکاری شد.\nدیگر تسکِ جدید نمی‌گیرد، یادآوریِ گزارش نمی‌شود و در کارتِ عملکرد نمی‌آید. "
+        f"سابقه‌اش کامل حفظ شد. برای بازگشت: <code>/unretire</code>.{tail}", parse_mode=ParseMode.HTML)
+
+
+async def cmd_unretire(update, context):
+    """/unretire (ریپلای/منشن/نام) — بازگشتِ همکاریِ پرسنلِ قطع‌شده."""
+    msg, user = update.effective_message, update.effective_user
+    if not msg or not user or not _is_admin(user.id):
+        return
+    tgt = _resolve_target(msg, " ".join(_args(msg)))
+    if not tgt:
+        await msg.reply_text("فردِ موردِ نظر را مشخص کن: ریپلای/منشن/نام.")
+        return
+    uid, name = tgt
+    _set_retired(user.id, uid, name, False)
+    await msg.reply_text(f"✅ «{html.escape(name)}» دوباره فعال شد؛ از این پس تسک و یادآوری می‌گیرد.")

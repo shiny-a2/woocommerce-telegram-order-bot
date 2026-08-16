@@ -36,6 +36,7 @@ import igstats
 import reports
 import woo
 import worktasks
+import wt_finance
 
 # نام فارسی وضعیت‌ها (شامل وضعیت‌های سفارشی فروشگاه مثل deliver)
 _STATUS_FA = {
@@ -110,15 +111,16 @@ def build_caption(order, stock_location=None, summary=None, items_regular=None) 
     # تخفیف = حراجِ محصول + کوپن روی هم، سپس حمل و پرداختی.
     try:
         ship = float(f.get("shipping_total") or 0)
-        total = float(f.get("total") or 0)
         items_sub = float(f.get("items_subtotal") or 0)
+        disc = float(f.get("discount_total") or 0)   # تخفیفِ کوپن/سفارش
     except (TypeError, ValueError):
-        ship, total, items_sub = 0.0, 0.0, 0.0
+        ship, items_sub, disc = 0.0, 0.0, 0.0
     cl_ = config.CURRENCY_LABEL
     pre = float(items_regular or 0)          # مجموعِ قیمتِ اصلی (قبل از حراج)
     if pre < items_sub:                      # اگر داده نشد یا کمتر بود → همان جمعِ آیتم‌ها
         pre = items_sub
-    total_disc = pre - (total - ship)        # حراجِ محصول + کوپن
+    # تخفیفِ کل = (قیمتِ اصلی) − (پرداختیِ کالاها پس از کوپن). مستقل از مالیات/حمل تا تخفیفِ کاذب نسازد.
+    total_disc = pre - (items_sub - disc)    # حراجِ محصول (pre−items_sub) + کوپن (disc)
     if total_disc > 0.5:
         lines.append(f"🏷️ قیمت قبل تخفیف: {reports.fmt_money(pre)} {cl_}")
         cps = [c for c in (f.get('coupons') or []) if c]
@@ -194,6 +196,7 @@ def _main_menu():
         [InlineKeyboardButton("📞 پیگیری رهاشده‌ها", callback_data="followup"),
          InlineKeyboardButton("📊 نتایج پیگیری", callback_data="outcomes")],
         [InlineKeyboardButton("📄 خروجی اکسل (این ماه)", callback_data="csv:month")],
+        [InlineKeyboardButton("💰 حساب مالی", callback_data="finance:cur")],
         [InlineKeyboardButton("🔍 جستجوی سفارش", callback_data="search")],
     ])
 
@@ -230,6 +233,180 @@ def _months_menu(jy):
 
 def _back_kb():
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 منو", callback_data="menu:main")]])
+
+
+# ---------- تأمین‌کنندهٔ سیتیزن (app.supplier.example) — لاگینِ OTP از طریقِ دکمه (ادمین‌ها + اپراتور) ----------
+def _citizen_can(uid) -> bool:
+    return uid in config.ADMIN_USER_IDS or uid == getattr(config, "WT_PRICESYNC_OPERATOR_ID", 0)
+
+
+def _citizen_kb():
+    return InlineKeyboardMarkup([[InlineKeyboardButton("📲 درخواستِ کدِ پیامکی", callback_data="citizen:sendcode")]])
+
+
+async def cmd_citizen(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """وضعیت/لاگینِ تأمین‌کنندهٔ سیتیزن (ادمین‌ها + اپراتور، فقط پیوی)."""
+    import saati
+    u = update.effective_user
+    if not u or not _citizen_can(u.id):
+        return
+    if update.effective_chat and update.effective_chat.type != "private":
+        await update.message.reply_text("🔒 فقط در چتِ خصوصی با ربات.")
+        return
+    st = saati.status()
+    if st["logged_in"]:
+        exp = f" · اعتبار ~{_fa(st['exp_in_h'])} ساعت" if st.get("exp_in_h") else ""
+        await update.message.reply_text(f"✅ سیتیزن لاگین است ({st['user'] or '—'}){exp}.\nبرای لاگینِ دوباره دکمهٔ زیر را بزن.",
+                                        reply_markup=_citizen_kb())
+    else:
+        await update.message.reply_text(f"🔑 لاگینِ سیتیزن لازم است ({saati.mobile()}).\nدکمهٔ زیر را بزن تا کدِ پیامکی بیاید، بعد همین‌جا کد را بنویس.",
+                                        reply_markup=_citizen_kb())
+
+
+async def prompt_citizen_login(app, reason: str = ""):
+    """به مالک + اپراتور پیام + دکمهٔ «درخواستِ کد» می‌فرستد (وقتی توکن منقضی شد)."""
+    import saati
+    targets = list(dict.fromkeys(list(config.ADMIN_USER_IDS) + [getattr(config, "WT_PRICESYNC_OPERATOR_ID", 0)]))
+    txt = (f"🔑 لاگینِ تأمین‌کنندهٔ سیتیزن لازم شد{(' — ' + reason) if reason else ''}.\n"
+           f"دکمهٔ زیر را بزن تا کدِ پیامکی به {saati.mobile()} بیاید، بعد کد را همین‌جا بنویس.")
+    for t in targets:
+        try:
+            await app.bot.send_message(t, txt, reply_markup=_citizen_kb())
+        except Exception as e:  # noqa: BLE001
+            print(f"[citizen] prompt {t}: {e!r}")
+
+
+async def _citizen_verify(msg, code):
+    import saati
+    res = await asyncio.to_thread(saati.verify_code, code)
+    if not res.get("ok"):
+        await msg.reply_text(f"❌ لاگین نشد: {res.get('msg')}\nدوباره دکمهٔ «درخواستِ کد» را بزن.", reply_markup=_citizen_kb())
+        return
+    st = saati.status()
+    exp = f" · اعتبار ~{_fa(st['exp_in_h'])} ساعت" if st.get("exp_in_h") else ""
+    await msg.reply_text(f"✅ لاگینِ سیتیزن موفق ({res.get('name') or '—'}){exp}. نمونهٔ محصولات را می‌خوانم…")
+    pr = await asyncio.to_thread(saati.get_products, 1)
+    items = pr.get("items") or []
+    if not items:
+        await msg.reply_text(f"⚠️ محصولی خوانده نشد. unauthorized={pr.get('unauthorized')} · raw: {str(pr.get('raw'))[:250]}")
+        return
+    s0 = items[0]
+    keys = list(s0.keys()) if isinstance(s0, dict) else "—"
+    await msg.reply_text(f"📦 {_fa(len(items))} محصول در صفحهٔ ۱.\nفیلدها: {keys}\nنمونه: {str(s0)[:800]}")
+
+
+# ---------- درجِ خودکارِ تصاویر (کتابخانهٔ رسانه → محصولاتِ بی‌عکس، بر اساسِ رفرنس) — ادمین‌ها + اپراتور ----------
+def _mediaimg_can(uid) -> bool:
+    return uid in config.ADMIN_USER_IDS or uid == getattr(config, "WT_MEDIAIMG_OPERATOR_ID", 0)
+
+
+def _mediaimg_kb(show_apply: bool = False):
+    rows = [[InlineKeyboardButton("🖼 پیش‌نمایشِ درجِ تصاویر", callback_data="mediaimg:preview")]]
+    if show_apply:
+        rows.insert(0, [InlineKeyboardButton("✅ اعمالِ درجِ تصاویر", callback_data="mediaimg:apply")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _spawn_mediaimg(apply: bool):
+    """جابِ درجِ تصاویر را به‌صورتِ پروسهٔ مستقل اجرا می‌کند (خودش گزارشِ اکسل به مالک+اپراتور می‌فرستد)."""
+    import os as _os
+    import subprocess
+    import sys as _sys
+    env = dict(_os.environ)
+    env["PYTHONUTF8"] = "1"
+    env["WT_MEDIAIMG_APPLY"] = "1" if apply else "0"
+    here = _os.path.dirname(_os.path.abspath(__file__))
+    subprocess.Popen([_sys.executable, "-u", _os.path.join(here, "mediaimg_job.py")],
+                     cwd=here, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+async def cmd_media_images(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """دکمهٔ درجِ خودکارِ تصاویر (ادمین‌ها + اپراتور، فقط پیوی)."""
+    u = update.effective_user
+    if not u or not _mediaimg_can(u.id):
+        return
+    if update.effective_chat and update.effective_chat.type != "private":
+        await update.message.reply_text("🔒 فقط در چتِ خصوصی با ربات.")
+        return
+    await update.message.reply_text(
+        "🖼 درجِ خودکارِ تصاویر\n\nاول «پیش‌نمایش» را بزن تا ببینی چند محصولِ بی‌عکس رسانهٔ متناظر دارند "
+        "(اکسل می‌آید، بدونِ نوشتن). بعد «اعمال» تا عکسِ شاخص + گالری ست شود.",
+        reply_markup=_mediaimg_kb(show_apply=True))
+
+
+# ---------- گرفتنِ اکسلِ برند از کاتالوگِ منبع (ETL) — ادمین‌ها + اپراتور ----------
+def _spawn_extract(brand: str, offset: int = 0):
+    """جابِ استخراجِ برند را به‌صورتِ پروسهٔ مستقل اجرا می‌کند (خودش اکسل می‌فرستد)."""
+    import os as _os
+    import subprocess
+    import sys as _sys
+    env = dict(_os.environ)
+    env["PYTHONUTF8"] = "1"
+    env["IT_BRAND"] = brand
+    env["IT_OFFSET"] = str(offset)
+    here = _os.path.dirname(_os.path.abspath(__file__))
+    subprocess.Popen([_sys.executable, "-u", _os.path.join(here, "irantimer_extract_job.py")],
+                     cwd=here, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+async def cmd_extract_brand(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """دکمهٔ «گرفتنِ اکسلِ برندِ کاتالوگِ منبع» (ادمین‌ها + اپراتور، فقط پیوی)."""
+    u = update.effective_user
+    if not u or not _mediaimg_can(u.id):
+        return
+    if update.effective_chat and update.effective_chat.type != "private":
+        await update.message.reply_text("🔒 فقط در چتِ خصوصی با ربات.")
+        return
+    if context.args:
+        brand = " ".join(context.args)
+        _spawn_extract(brand)
+        await update.message.reply_text(f"⏳ «{brand}» شروع شد؛ کمی طول می‌کشد و اکسلِ محصولاتِ جدید می‌آید.")
+    else:
+        context.user_data["awaiting_it_brand"] = True
+        await update.message.reply_text("📥 نامِ برند را بفرست (مثلاً «سیتیزن» یا «لی کوپر») تا اکسلِ محصولاتِ جدیدش (که روی سایت نداریم) را بسازم.")
+
+
+def _spawn_import(path: str, dry: bool):
+    """جابِ درجِ اکسل روی سایت را اجرا می‌کند (خودش گزارش می‌فرستد)."""
+    import os as _os
+    import subprocess
+    import sys as _sys
+    env = dict(_os.environ)
+    env["PYTHONUTF8"] = "1"
+    env["IT_IMPORT_FILE"] = path
+    env["IT_IMPORT_DRYRUN"] = "1" if dry else "0"
+    here = _os.path.dirname(_os.path.abspath(__file__))
+    subprocess.Popen([_sys.executable, "-u", _os.path.join(here, "irantimer_import_job.py")],
+                     cwd=here, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """آپلودِ اکسلِ اصلاح‌شده توسطِ اپراتور/ادمین در پیوی → دکمهٔ درج."""
+    msg = update.message
+    u = update.effective_user
+    if not msg or not msg.document or not u or not _mediaimg_can(u.id):
+        return
+    if update.effective_chat and update.effective_chat.type != "private":
+        return
+    if not (msg.document.file_name or "").lower().endswith(".xlsx"):
+        return
+    import os as _os
+    here = _os.path.dirname(_os.path.abspath(__file__))
+    path = _os.path.join(here, "data", f"import_upload_{u.id}.xlsx")
+    f = await context.bot.get_file(msg.document.file_id)
+    await f.download_to_drive(path)
+    context.user_data["it_import_file"] = path
+    await msg.reply_text(
+        "📥 اکسل دریافت شد.\n\nاول «پیش‌نمایش» را بزن (چیزی روی سایت ساخته نمی‌شود، فقط گزارش). "
+        "بعد «درجِ روی سایت» تا محصولات به‌صورتِ پیش‌نویس ساخته شوند (تکراری‌ها با رفرنس رد می‌شوند).\n\n"
+        "یادآوری: عکس‌ها جدا با دکمهٔ /media_images می‌چسبند.",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔸 پیش‌نمایش (بدونِ ساخت)", callback_data="itimport:dry")],
+            [InlineKeyboardButton("⬆️ درجِ روی سایت (پیش‌نویس)", callback_data="itimport:apply")],
+        ]))
 
 
 # ---------- پیگیری رهاشده‌ها (دکمه‌های زیر هر لید) ----------
@@ -1208,6 +1385,50 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         await _send_remaining_cards(q, context)
         return
+    if data == "citizen:sendcode":   # لاگینِ سیتیزن — ادمین‌ها + اپراتور (قبل از گیتِ فقط‌ادمین)
+        if not q.from_user or not _citizen_can(q.from_user.id):
+            await _safe_answer(q, "دسترسی ندارید.", show_alert=True)
+            return
+        await _safe_answer(q)
+        import saati
+        res = await asyncio.to_thread(saati.send_code)
+        if res.get("ok"):
+            context.user_data["awaiting_citizen_code"] = True
+            await q.edit_message_text(f"📲 کدِ پیامکی به {saati.mobile()} فرستاده شد.\nهمین‌جا <b>کد</b> را بنویس.",
+                                      parse_mode=ParseMode.HTML)
+        else:
+            await q.edit_message_text(f"❌ ارسالِ کد نشد: {res.get('msg') or '—'}\nدوباره امتحان کن.",
+                                      reply_markup=_citizen_kb())
+        return
+    if data in ("itimport:dry", "itimport:apply"):   # درجِ اکسل روی سایت — ادمین‌ها + اپراتور
+        if not q.from_user or not _mediaimg_can(q.from_user.id):
+            await _safe_answer(q, "دسترسی ندارید.", show_alert=True)
+            return
+        await _safe_answer(q)
+        import os as _os
+        path = context.user_data.get("it_import_file")
+        if not path or not _os.path.exists(path):
+            await q.edit_message_text("⚠️ فایلی پیدا نشد. دوباره اکسلِ اصلاح‌شده را آپلود کن.")
+            return
+        dry = data == "itimport:dry"
+        _spawn_import(path, dry)
+        await q.edit_message_text("🔸 پیش‌نمایش شروع شد؛ گزارش می‌آید (چیزی ساخته نشد)." if dry
+                                  else "⬆️ درج شروع شد؛ محصولات به‌صورتِ پیش‌نویس ساخته می‌شوند و گزارشِ اکسل می‌آید.")
+        return
+    if data in ("mediaimg:preview", "mediaimg:apply"):   # درجِ تصاویر — ادمین‌ها + اپراتور (قبل از گیتِ فقط‌ادمین)
+        if not q.from_user or not _mediaimg_can(q.from_user.id):
+            await _safe_answer(q, "دسترسی ندارید.", show_alert=True)
+            return
+        await _safe_answer(q)
+        apply = data == "mediaimg:apply"
+        _spawn_mediaimg(apply)
+        if apply:
+            await q.edit_message_text("✅ درجِ تصاویر شروع شد. وقتی تمام شد، اکسلِ نتیجه به تو و مالک می‌آید.")
+        else:
+            await q.edit_message_text(
+                "🖼 پیش‌نمایش شروع شد. اکسلِ محصولاتِ بی‌عکس + وضعیتِ رسانه‌شان می‌آید (بدونِ نوشتن).\n\nبعدش «اعمال» را بزن.",
+                reply_markup=_mediaimg_kb(show_apply=True))
+        return
     if not q.from_user or q.from_user.id not in config.ADMIN_USER_IDS:
         await _safe_answer(q,"اجازه‌ی دسترسی ندارید.", show_alert=True)
         return
@@ -1232,6 +1453,19 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("📆 یک ماه را انتخاب کنید:", reply_markup=_months_menu(int(data.split(":")[1])))
         elif data == "menu:analytics":
             await q.edit_message_text("📈 آمار و تحلیل — یک گزینه را انتخاب کنید:", reply_markup=_analytics_menu())
+        elif data.startswith("finance:"):   # «حساب مالی» — خلاصهٔ مالیِ ماهانه (فقط‌ادمین، فقط پیوی)
+            arg = data.split(":", 1)[1]
+            month = wt_finance.cur_month() if arg == "cur" else arg
+            fin = await wt_finance.load_month(month)   # حقوقِ ثابت + مانده از قبل اعمال می‌شود
+            await q.edit_message_text(wt_finance.render(fin, month),
+                                      reply_markup=wt_finance.summary_kb(fin, month),
+                                      parse_mode=ParseMode.HTML)
+        elif data.startswith("yfin:rx:"):    # ریزِ دریافتی/پرداختیِ همان ماه
+            month = data.split(":", 2)[2]
+            fin = await crm.finance(month)
+            await q.edit_message_text(wt_finance.render_detail(fin, month),
+                                      reply_markup=wt_finance.detail_kb(month),
+                                      parse_mode=ParseMode.HTML)
         elif data == "rep:compare":
             await q.edit_message_text(await reports.report_compare(), reply_markup=_back_kb())
         elif data == "rep:topproducts":
@@ -1309,12 +1543,30 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print(f"[cb] انجام شد: {data}")
 
 
+def _record_atefeh_qa(user, text: str) -> str:
+    """سؤال/بازخوردِ اپراتور (بازبینیِ دفترچه/نمونهٔ کاتالوگِ منبع) را برای پاسخ‌گویی ذخیره می‌کند."""
+    import datetime as _dt
+    import json as _json
+    import os as _os
+    here = _os.path.dirname(_os.path.abspath(__file__))
+    path = _os.path.join(here, "data", "atefeh_qa.jsonl")
+    rec = {"ts": _dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+           "uid": getattr(user, "id", 0),
+           "name": getattr(user, "full_name", "") or getattr(user, "username", "") or "",
+           "text": text}
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(_json.dumps(rec, ensure_ascii=False) + "\n")
+    return path
+
+
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """یادداشت/جزئیاتِ CRM (ریپلای روی کارت/پرامپت) یا عبارتِ جستجوی سفارش."""
     msg = update.message
     if not msg:  # پیامِ ادیت‌شده / پستِ کانال → نادیده
         return
     if await worktasks.on_group_message(update, context):  # گروهِ گزارشِ کار: ثبتِ تسک/گزارش
+        return
+    if await worktasks.maybe_hr_private(update, context):   # پیویِ مدیرِ اصلی: «حقوق …» (پرسنل/حقوق)
         return
     # ثبتِ CRM با ریپلای (با Privacyِ گروه هم کار می‌کند)
     if msg.reply_to_message and crm.enabled():
@@ -1373,6 +1625,39 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 print(f"[crm] ثبتِ ریپلای {phone}: {e!r}")
                 await msg.reply_text("⚠️ ثبت نشد (خطای CRM). دوباره امتحان کن.")
             return
+
+    # کدِ OTPِ سیتیزن (بعد از فشردنِ دکمهٔ «درخواستِ کد»)
+    _cu = update.effective_user
+    if context.user_data.get("awaiting_citizen_code") and _cu and _citizen_can(_cu.id):
+        context.user_data["awaiting_citizen_code"] = False
+        code = re.sub(r"\D", "", (msg.text or ""))
+        if not code:
+            await msg.reply_text("⚠️ کدِ عددی نبود. دوباره دکمهٔ «درخواستِ کد» را بزن.", reply_markup=_citizen_kb())
+            return
+        await _citizen_verify(msg, code)
+        return
+
+    # نامِ برند برای دکمهٔ «گرفتنِ اکسلِ برند» (قبل از پلِ پرسش‌وپاسخ تا سؤال تلقی نشود)
+    if context.user_data.get("awaiting_it_brand") and _cu and _mediaimg_can(_cu.id) and (msg.text or "").strip():
+        context.user_data["awaiting_it_brand"] = False
+        brand = msg.text.strip()
+        _spawn_extract(brand)
+        await msg.reply_text(f"⏳ «{brand}» شروع شد؛ کمی طول می‌کشد و اکسلِ محصولاتِ جدید (بدونِ تکرارِ سایت) می‌آید.")
+        return
+
+    # پلِ پرسش‌وپاسخِ اپراتور (بازبینیِ دفترچه/نمونهٔ کاتالوگِ منبع): سؤال/بازخوردش را ذخیره + به مالک اطلاع.
+    # ریپلای هم گرفته می‌شود (ریپلای‌های CRM بالاتر return شده‌اند، پس اینجا فقط سؤال/بازخوردِ اوست).
+    if _cu and _cu.id == getattr(config, "WT_MEDIAIMG_OPERATOR_ID", 0) \
+            and update.effective_chat and update.effective_chat.type == "private" \
+            and (msg.text or "").strip():
+        _record_atefeh_qa(_cu, msg.text.strip())
+        await msg.reply_text("✅ رسید و ثبت شد. جوابش را همین‌جا برایت می‌فرستم 🌷")
+        for oid in config.ADMIN_USER_IDS:
+            try:
+                await context.application.bot.send_message(oid, f"❓ از اپراتور (بازبینیِ دفترچه):\n\n{msg.text.strip()}")
+            except Exception:  # noqa: BLE001
+                pass
+        return
 
     if not _authorized(update) or not context.user_data.get("awaiting_search"):
         return
@@ -1477,6 +1762,9 @@ def register_handlers(app: Application):
     app.add_handler(CommandHandler("setfollowup", cmd_setfollowup))
     app.add_handler(CommandHandler("range", cmd_range))
     app.add_handler(CommandHandler("crm", cmd_crm))
+    app.add_handler(CommandHandler("citizen", cmd_citizen))
+    app.add_handler(CommandHandler("media_images", cmd_media_images))
+    app.add_handler(CommandHandler("brand", cmd_extract_brand))
     app.add_handler(CommandHandler("newleads", cmd_newcards))
     app.add_handler(CommandHandler("setworkgroup", worktasks.cmd_setworkgroup))
     app.add_handler(CommandHandler("work", worktasks.cmd_work))
@@ -1496,6 +1784,30 @@ def register_handlers(app: Application):
     app.add_handler(CommandHandler("role", worktasks.cmd_role))
     app.add_handler(CommandHandler("health", worktasks.cmd_health))
     app.add_handler(CommandHandler("setup", worktasks.cmd_setup))
+    # نسخهٔ عملیاتیِ اصلی — دستورهای مدیریتیِ چرخه (فقط وقتی WT_LIFECYCLE_ENABLED روشن باشد اثر می‌کنند)
+    app.add_handler(CommandHandler("approve", worktasks.cmd_approve))
+    app.add_handler(CommandHandler("reopen", worktasks.cmd_reopen))
+    app.add_handler(CommandHandler("cancel", worktasks.cmd_cancel))
+    app.add_handler(CommandHandler("reassign", worktasks.cmd_reassign))
+    app.add_handler(CommandHandler("deadline", worktasks.cmd_deadline))
+    app.add_handler(CommandHandler("priority", worktasks.cmd_priority))
+    app.add_handler(CommandHandler("vmode", worktasks.cmd_vmode))
+    app.add_handler(CommandHandler("pending", worktasks.cmd_pending))
+    app.add_handler(CommandHandler("board", worktasks.cmd_lcreport))
+    # مدیریتِ سادهٔ پرسنل + حضور + حقوق (فقط وقتی flag مربوطه روشن باشد اثر می‌کنند)
+    app.add_handler(CommandHandler("personnel", worktasks.cmd_personnel))
+    app.add_handler(CommandHandler("addstaff", worktasks.cmd_addstaff))
+    app.add_handler(CommandHandler("editstaff", worktasks.cmd_editstaff))
+    app.add_handler(CommandHandler("deactivatestaff", worktasks.cmd_deactivatestaff))
+    app.add_handler(CommandHandler("activatestaff", worktasks.cmd_activatestaff))
+    app.add_handler(CommandHandler("setsalary", worktasks.cmd_setsalary))
+    app.add_handler(CommandHandler("setmonthhours", worktasks.cmd_setmonthhours))
+    app.add_handler(CommandHandler("attendance", worktasks.cmd_attendance))
+    app.add_handler(CommandHandler("payroll", worktasks.cmd_payroll))
+    # قطعِ همکاریِ سبک (مستقل از HR flag)
+    app.add_handler(CommandHandler("retire", worktasks.cmd_retire))
+    app.add_handler(CommandHandler("unretire", worktasks.cmd_unretire))
     app.add_handler(CommandHandler("fixcaptions", cmd_fixcaptions))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
+    app.add_handler(MessageHandler(filters.Document.ALL, on_document))
     app.add_handler(CallbackQueryHandler(on_callback))

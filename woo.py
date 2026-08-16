@@ -113,6 +113,23 @@ def _client():
     return _api
 
 
+_api_write = None
+
+
+def _write_client():
+    """کلاینتِ نوشتن. اگر WOO_WRITE_CK/CS تنظیم شده باشد از آن (کلیدِ اختصاصیِ نوشتن) استفاده می‌کند،
+    وگرنه همان کلیدِ اصلی (که آن‌وقت باید Read/Write باشد)."""
+    global _api_write
+    wck = getattr(config, "WOO_WRITE_CK", "") or ""
+    wcs = getattr(config, "WOO_WRITE_CS", "") or ""
+    if not wck:
+        return _client()
+    if _api_write is None:
+        _api_write = API(url=config.WOO_URL, consumer_key=wck, consumer_secret=wcs,
+                         version="wc/v3", timeout=30, query_string_auth=True)
+    return _api_write
+
+
 def _get_sync(endpoint, params=None):
     global _req_count
     _req_count += 1
@@ -144,10 +161,29 @@ async def total_count(endpoint, params=None):
     return await _call(_count_sync, endpoint, params)
 
 
-def _put_sync(endpoint, data):
-    resp = _client().put(endpoint, data)
+def _write_raw(method, endpoint, data):
+    """نوشتن با پارامترها در QUERY-STRING به‌جای بدنه.
+
+    میزبان/WAF این سایت بدنهٔ درخواستِ نوشتنِ wp-json را strip می‌کند (همان‌طور که هدرِ
+    Authorization را هم حذف می‌کند) → PUT/POSTِ بدنه‌دار جواب ۲۰۰ می‌دهد ولی هیچ فیلدی ذخیره
+    نمی‌شود. WP-REST پارامترها را از query-string هم می‌خواند، پس نوشتن از این راه واقعی ذخیره می‌شود.
+    فقط برای دادهٔ تختِ ساده (رشته/عدد/بولین) — که سینکِ قیمت/موجودی همین است.
+    """
+    global _req_count
+    _req_count += 1
+    wck = getattr(config, "WOO_WRITE_CK", "") or config.WOO_CK
+    wcs = getattr(config, "WOO_WRITE_CS", "") or config.WOO_CS
+    url = f"{config.WOO_URL}/wp-json/wc/v3/{endpoint}"
+    params = {"consumer_key": wck, "consumer_secret": wcs}
+    for k, v in (data or {}).items():
+        params[k] = ("true" if v else "false") if isinstance(v, bool) else str(v)
+    resp = requests.request(method, url, params=params, timeout=30)
     resp.raise_for_status()
     return resp.json()
+
+
+def _put_sync(endpoint, data):
+    return _write_raw("PUT", endpoint, data)
 
 
 async def put(endpoint, data):
@@ -155,9 +191,7 @@ async def put(endpoint, data):
 
 
 def _post_sync(endpoint, data):
-    resp = _client().post(endpoint, data)
-    resp.raise_for_status()
-    return resp.json()
+    return _write_raw("POST", endpoint, data)
 
 
 async def post(endpoint, data):

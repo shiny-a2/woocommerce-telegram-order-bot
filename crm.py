@@ -177,6 +177,73 @@ async def due_leads(before=None, after=None, assigned_to=None, limit=50) -> list
     return data.get("due", []) if isinstance(data, dict) else (data or [])
 
 
+# ---------- مالی / «حساب مالی» (فاز ۱: فقط‌خواندنی) ----------
+async def finance(month: str | None = None, fixed_salary=None, carry=None,
+                  deposit=None, bucket=None, date_from=None, date_to=None) -> dict:
+    """خلاصهٔ مالیِ ماهِ جلالی (YYYY-MM) از اندپوینتِ /finance. طبقِ docs/crm-finance-endpoint-spec.md.
+
+    پارامترها (اختیاری، ریال): fixed_salary، carry، deposit، bucket. date_from/date_to برای بازهٔ دلخواه
+    (اگر اندپوینت پشتیبانی کند). برخلاف بقیه هرگز استثنا نمی‌دهد — همیشه dict با کلیدِ ok:
+    - اندپوینت نساخته → {"ok":False,"reason":"no_endpoint"} ؛ CRM خاموش → {"ok":False,"reason":"crm_disabled"}
+    """
+    if not enabled():
+        return {"ok": False, "reason": "crm_disabled"}
+    params = {}
+    if month:
+        params["month"] = month
+    if fixed_salary is not None:
+        params["fixed_salary"] = int(fixed_salary)
+    if carry is not None:
+        params["carry"] = int(carry)
+    if deposit is not None:
+        params["deposit"] = int(deposit)
+    if bucket is not None:
+        params["bucket"] = int(bucket)
+    if date_from:
+        params["from"] = date_from
+    if date_to:
+        params["to"] = date_to
+
+    def _call():
+        try:
+            data = _get_sync("/finance", params)
+            return data if isinstance(data, dict) else {"ok": False, "reason": "bad_response"}
+        except requests.exceptions.HTTPError as e:
+            code = e.response.status_code if e.response is not None else 0
+            return {"ok": False, "reason": "no_endpoint" if code == 404 else f"http_{code}"}
+        except (requests.exceptions.ConnectTimeout, requests.exceptions.ConnectionError):
+            return {"ok": False, "reason": "unreachable"}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "reason": type(e).__name__}
+
+    return await asyncio.to_thread(_call)
+
+
+async def product_images(product_id: int, dry_run: bool = False) -> dict:
+    """درجِ عکسِ شاخص+گالری + تکمیلِ متادیتای سئو (alt/title/caption/description=عنوانِ محصول)
+    از سمتِ سرور. طبقِ docs/crm-media-images-endpoint-spec.md. هرگز استثنا نمی‌دهد.
+    اندپوینت نساخته → {"ok":False,"reason":"no_endpoint"}."""
+    if not enabled():
+        return {"ok": False, "reason": "crm_disabled"}
+    params = {"product_id": int(product_id)}
+    if dry_run:
+        params["dry_run"] = 1
+
+    def _call():
+        try:
+            data = _do(requests.post, "/product-images", params=params)  # params در query (ضدِ body-strip)
+            return data if isinstance(data, dict) else {"ok": False, "reason": "bad_response"}
+        except requests.exceptions.HTTPError as e:
+            code = e.response.status_code if e.response is not None else 0
+            return {"ok": False, "reason": "no_endpoint" if code == 404 else f"http_{code}"}
+        except (requests.exceptions.ConnectTimeout, requests.exceptions.ConnectionError):
+            return {"ok": False, "reason": "unreachable"}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "reason": type(e).__name__}
+
+    return await asyncio.to_thread(_call)
+
+
 # ---------- نوشتن (فاز ۲ — آماده، در UI بعداً وصل می‌شود) ----------
 def _post_sync(path: str, payload: dict):
     return _do(requests.post, path, json=payload)

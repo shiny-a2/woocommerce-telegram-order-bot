@@ -16,6 +16,11 @@ def init():
     global _conn
     os.makedirs(os.path.dirname(config.DB_PATH) or ".", exist_ok=True)
     _conn = sqlite3.connect(config.DB_PATH, check_same_thread=False)
+    try:  # سخت‌سازیِ افزایشی و امن (بدونِ تغییرِ schema/داده): انتظار روی lock + اجرای FKهای اعلام‌شده
+        _conn.execute(f"PRAGMA busy_timeout={max(0, int(getattr(config, 'SQLITE_BUSY_TIMEOUT_MS', 5000)))}")
+        _conn.execute("PRAGMA foreign_keys=ON")
+    except sqlite3.OperationalError:
+        pass
     _conn.execute(
         """CREATE TABLE IF NOT EXISTS orders (
             order_id       INTEGER PRIMARY KEY,
