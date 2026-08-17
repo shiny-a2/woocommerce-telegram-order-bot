@@ -5,3 +5,5 @@ __pycache__/
 *.pyc
 *.log
 docs/internal-manager-audit/
+
+build_ttbol_sample.py
