@@ -192,15 +192,17 @@ async def rebuild_and_edit(app, order_id: int):
         print(f"[edit] سفارش {order_id} گرفته نشد: {e}")
         return
     summary = plugin_events.summarize(await _safe_notes(order_id))
-    # تعویضِ ساعت: یک‌بار عکسِ «قدیمی + جدید» را کنارِ هم در همان کارت بگذار (نه فقط کپشن).
-    # line_item هنوز ساعتِ قدیمی است؛ نامِ ساعتِ جدید فقط در نوتِ تعویض هست (summary["swap"][0]).
-    # نوت: «X» ← Y  →  X (داخلِ «») ساعتِ اصلی/قبل است، و Y (بعدِ فلش) = line_itemِ فعلی = ساعتِ نهایی/بعد.
-    swap = summary.get("swap")  # (نامِ اصلی/قبل، نامِ نهایی/بعد) یا None
+    # تعویضِ ساعت: یک‌بار عکسِ «قبل + بعد» را کنارِ هم در همان کارت بگذار (نه فقط کپشن).
+    # نوت: «X» ← Y  →  هر دو ساعتِ جفتِ تعویض‌اند. قبل = swap[0]، بعد = swap[1] — هر دو با نام
+    # از فروشگاه عکس‌گیری می‌شوند. ⚠️ بعد را از «عکسِ اولِ سفارش» نگیر: در سفارشِ چنداقلامی عکسِ اولْ
+    # می‌تواند ساعتِ بی‌ربطِ دیگری باشد (باگِ سفارش ۲۹۴۷۴۸: ناوی‌مارینِ نامرتبط به‌جای ساعتِ تعویض).
+    swap = summary.get("swap")  # (نامِ ساعتِ «قبل»، نامِ ساعتِ «بعد»)
     if swap and db.get_meta(f"photo_swapped:{order_id}") != "1":
         try:
-            after_photos, cap_fresh, _loc = await build_order_card(order)  # line_item = ساعتِ نهایی (بعد)
-            after_photo = after_photos[0] if after_photos else None
-            before_photo = await _product_photo_by_name(swap[0])           # ساعتِ اصلی از نوت (قبل)
+            _after_photos, cap_fresh, _loc = await build_order_card(order)  # فقط برای کپشنِ تازه
+            before_photo = await _product_photo_by_name(swap[0])           # قبل (از نوت)
+            after_photo = (await _product_photo_by_name(swap[1])           # بعد = ساعتِ جفتِ تعویض
+                           or (_after_photos[0] if _after_photos else None))  # افت: عکسِ سفارش
             combined = (_compose_side_by_side(before_photo, after_photo)    # چپ=قبل، راست=بعد
                         if (before_photo and after_photo) else (after_photo or before_photo))
             if combined:
