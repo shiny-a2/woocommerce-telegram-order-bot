@@ -169,6 +169,24 @@ def _size(specs, key, unit="mm"):
     return f"{m.group(0)}{unit}" if m else ""
 
 
+def rule_calendar(specs):
+    """تقویمِ کاتالوگِ منبع → ترمِ سایت (قانونِ اپراتور): شبانه‌روز→«روز و شب»، تقویم‌روز→«ماه‌شمار»."""
+    raw = _norm(specs.get("تقویم", "") or "")
+    out = []
+    if "شبانه" in raw:
+        out.append("روز و شب")
+    r2 = raw.replace("شبانه‌روز", "").replace("شبانه روز", "").replace("شبانه", "")
+    if "روز" in r2:
+        out.append("ماه‌شمار")
+    return _SEP.join(out)
+
+
+def _weight(specs):
+    """وزن ساعت = عدد + g بدونِ فاصله (قانونِ اپراتور)."""
+    m = re.search(r"[\d.]+", _norm(specs.get("وزن ساعت", "")))
+    return f"{m.group(0)}g" if m else ""
+
+
 def map_product(d: dict, brand: str) -> "OrderedDict":
     """یک محصولِ کاتالوگِ منبع (خروجیِ irantimer.parse_detail) → dictِ اتریبیوتِ سایت."""
     sp = d.get("specs", {}) or {}
@@ -189,7 +207,7 @@ def map_product(d: dict, brand: str) -> "OrderedDict":
     row["نوع شیشه"] = _mapv("نوع شیشه", sp)
     row["طرح بند"] = _mapv("طرح بند", sp)
     row["نوع قفل"] = _mapv("نوع قفل", sp)
-    row["تقویم و نوع آن"] = _mapv("تقویم و نوع آن", sp)
+    row["تقویم و نوع آن"] = rule_calendar(sp)
     row["نگین"] = ""            # ثابتِ برند — اپراتور پر می‌کند
     row["گارانتی"] = ""          # ثابتِ برند
     row["گارانتی کننده در ایران"] = ""  # ثابتِ برند
@@ -199,5 +217,5 @@ def map_product(d: dict, brand: str) -> "OrderedDict":
     row["سایز قاب"] = _size(sp, "عرض قاب")
     row["ارتفاع قاب"] = _size(sp, "ارتفاع قاب")
     row["عرض بند"] = _size(sp, "عرض بند")
-    row["وزن ساعت"] = _norm(sp.get("وزن ساعت", ""))
+    row["وزن ساعت"] = _weight(sp)
     return row

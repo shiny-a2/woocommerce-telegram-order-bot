@@ -336,17 +336,32 @@ async def cmd_media_images(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ---------- گرفتنِ اکسلِ برند از کاتالوگِ منبع (ETL) — ادمین‌ها + اپراتور ----------
-def _spawn_extract(brand: str, offset: int = 0):
-    """جابِ استخراجِ برند را به‌صورتِ پروسهٔ مستقل اجرا می‌کند (خودش اکسل می‌فرستد)."""
+# منبع‌های استخراج → (فایلِ جاب، نامِ envِ برند، نامِ envِ آفست، برچسب)
+_BRAND_SITES = {
+    "irantimer": ("irantimer_extract_job.py", "IT_BRAND", "IT_OFFSET", "کاتالوگِ منبع"),
+    "ttbol": ("ttbol_extract_job.py", "TB_BRAND", "TB_OFFSET", "competitor-shop.example"),
+}
+
+
+def _brand_site_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📗 کاتالوگِ منبع", callback_data="brandsite:irantimer")],
+        [InlineKeyboardButton("📘 competitor-shop.example", callback_data="brandsite:ttbol")],
+    ])
+
+
+def _spawn_extract(brand: str, site: str = "irantimer", offset: int = 0):
+    """جابِ استخراجِ برندِ سایتِ انتخاب‌شده را مستقل اجرا می‌کند (خودش اکسل می‌فرستد)."""
     import os as _os
     import subprocess
     import sys as _sys
+    job, k_brand, k_off, _lbl = _BRAND_SITES.get(site, _BRAND_SITES["irantimer"])
     env = dict(_os.environ)
     env["PYTHONUTF8"] = "1"
-    env["IT_BRAND"] = brand
-    env["IT_OFFSET"] = str(offset)
+    env[k_brand] = brand
+    env[k_off] = str(offset)
     here = _os.path.dirname(_os.path.abspath(__file__))
-    subprocess.Popen([_sys.executable, "-u", _os.path.join(here, "irantimer_extract_job.py")],
+    subprocess.Popen([_sys.executable, "-u", _os.path.join(here, job)],
                      cwd=here, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
@@ -359,13 +374,12 @@ async def cmd_extract_brand(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat and update.effective_chat.type != "private":
         await update.message.reply_text("🔒 فقط در چتِ خصوصی با ربات.")
         return
-    if context.args:
+    if context.args:  # /brand <name> → پیش‌فرض کاتالوگِ منبع (سازگاریِ عقب)
         brand = " ".join(context.args)
-        _spawn_extract(brand)
-        await update.message.reply_text(f"⏳ «{brand}» شروع شد؛ کمی طول می‌کشد و اکسلِ محصولاتِ جدید می‌آید.")
+        _spawn_extract(brand, "irantimer")
+        await update.message.reply_text(f"⏳ «{brand}» از کاتالوگِ منبع شروع شد؛ اکسلِ محصولاتِ جدید می‌آید.")
     else:
-        context.user_data["awaiting_it_brand"] = True
-        await update.message.reply_text("📥 نامِ برند را بفرست (مثلاً «سیتیزن» یا «لی کوپر») تا اکسلِ محصولاتِ جدیدش (که روی سایت نداریم) را بسازم.")
+        await update.message.reply_text("📥 محصولاتِ برند را از کدام سایت استخراج کنم؟", reply_markup=_brand_site_kb())
 
 
 def _spawn_import(path: str, dry: bool):
@@ -1400,6 +1414,17 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text(f"❌ ارسالِ کد نشد: {res.get('msg') or '—'}\nدوباره امتحان کن.",
                                       reply_markup=_citizen_kb())
         return
+    if data.startswith("brandsite:"):   # انتخابِ منبعِ استخراجِ برند — ادمین‌ها + اپراتور
+        if not q.from_user or not _mediaimg_can(q.from_user.id):
+            await _safe_answer(q, "دسترسی ندارید.", show_alert=True)
+            return
+        await _safe_answer(q)
+        site = data.split(":", 1)[1]
+        lbl = _BRAND_SITES.get(site, ("", "", "", site))[3]
+        context.user_data["brand_site"] = site
+        context.user_data["awaiting_it_brand"] = True
+        await q.edit_message_text(f"📥 نامِ برند را بفرست (منبع: {lbl}) — مثلاً «سیتیزن» یا «لی کوپر».")
+        return
     if data in ("itimport:dry", "itimport:apply"):   # درجِ اکسل روی سایت — ادمین‌ها + اپراتور
         if not q.from_user or not _mediaimg_can(q.from_user.id):
             await _safe_answer(q, "دسترسی ندارید.", show_alert=True)
@@ -1641,8 +1666,10 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if context.user_data.get("awaiting_it_brand") and _cu and _mediaimg_can(_cu.id) and (msg.text or "").strip():
         context.user_data["awaiting_it_brand"] = False
         brand = msg.text.strip()
-        _spawn_extract(brand)
-        await msg.reply_text(f"⏳ «{brand}» شروع شد؛ کمی طول می‌کشد و اکسلِ محصولاتِ جدید (بدونِ تکرارِ سایت) می‌آید.")
+        site = context.user_data.pop("brand_site", "irantimer")
+        _spawn_extract(brand, site)
+        lbl = _BRAND_SITES.get(site, ("", "", "", site))[3]
+        await msg.reply_text(f"⏳ «{brand}» از {lbl} شروع شد؛ اکسلِ محصولاتِ جدید (بدونِ تکرارِ سایت) می‌آید.")
         return
 
     # پلِ پرسش‌وپاسخِ اپراتور (بازبینیِ دفترچه/نمونهٔ کاتالوگِ منبع): سؤال/بازخوردش را ذخیره + به مالک اطلاع.
