@@ -20,6 +20,12 @@ import saati
 import woo
 
 CITIZEN_BRAND_TERM = 3197          # ترمِ اتریبیوتِ pa_نام-برند برای «سیتیزن»
+QQ_BRAND_TERM = 28861              # ترمِ برندِ «کیو اند کیو» (Q&Q)
+# تأمین‌کنندهٔ ساعتی چندبرندی است: category1 «QQ*» = Q&Q، بقیه (Mechanical/EcoDrive/Quartz/Promaster/…) = سیتیزن.
+BRAND_CFG = {
+    "citizen": {"site_term": CITIZEN_BRAND_TERM, "is_qq": False, "label": "سیتیزن"},
+    "qq":      {"site_term": QQ_BRAND_TERM,       "is_qq": True,  "label": "کیو اند کیو"},
+}
 REF_ATTR = "رفرانس"
 BRAND_ATTR = "نام برند"
 _DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
@@ -31,27 +37,35 @@ def norm_ref(r) -> str:
 
 
 # ---------- واکشی ----------
-def fetch_supplier() -> tuple[dict, dict]:
-    """{ref: {price:int(ریال), count:int, name}} + آمار. از توکنِ ذخیره‌شده. unauthorized → استثنا."""
+def fetch_supplier(brand: str = "citizen") -> tuple[dict, dict]:
+    """{ref: {price:int(ریال), count:int, name}} فقط برای برندِ خواسته‌شده + آمار. unauthorized → استثنا."""
+    want_qq = BRAND_CFG[brand]["is_qq"]
     res = saati.fetch_all_products()
     if res.get("unauthorized"):
         raise PermissionError("saati_unauthorized")
     out = {}
+    skipped_other = 0
     for it in res.get("items") or []:
+        is_qq = str(it.get("category1") or "").upper().startswith("QQ")
+        if is_qq != want_qq:      # فقط محصولاتِ همین برند (QQ*=Q&Q، بقیه=سیتیزن) — لیست‌ها جدا می‌مانند
+            skipped_other += 1
+            continue
         ref = norm_ref(it.get("reference"))
         if not ref:
             continue
         out[ref] = {"price": int(it.get("price") or 0), "count": int(it.get("count") or 0),
                     "name": (it.get("name") or "").strip()}
-    return out, {"total": len(res.get("items") or []), "pages": res.get("pages"), "refs": len(out)}
+    return out, {"total": len(res.get("items") or []), "pages": res.get("pages"), "refs": len(out),
+                 "skipped_other": skipped_other, "brand": brand}
 
 
-async def fetch_site() -> list:
-    """همهٔ محصولاتِ سیتیزنِ سایت (برند 3197). خروجی = list[{id, ref, name, price, status, manage_stock, qty}]."""
+async def fetch_site(brand: str = "citizen") -> list:
+    """همهٔ محصولاتِ سایتِ برندِ خواسته‌شده. خروجی = list[{id, ref, name, price, status, manage_stock, qty}]."""
+    term = BRAND_CFG[brand]["site_term"]
     out, page = [], 1
     fields = "id,name,regular_price,stock_status,manage_stock,stock_quantity,attributes"
     while True:
-        batch = await woo.get("products", {"attribute": "pa_نام-برند", "attribute_term": CITIZEN_BRAND_TERM,
+        batch = await woo.get("products", {"attribute": "pa_نام-برند", "attribute_term": term,
                                            "per_page": 100, "page": page, "_fields": fields})
         if not batch:
             break
@@ -244,13 +258,14 @@ def build_report(plan: dict, meta: dict, out_path: str, applied=False, apply_res
     return out_path
 
 
-async def run(woo_mod, apply: bool = False, out_dir: str | None = None) -> dict:
-    supplier, meta = fetch_supplier()
-    site = await fetch_site()
+async def run(woo_mod, apply: bool = False, out_dir: str | None = None, brand: str = "citizen") -> dict:
+    supplier, meta = fetch_supplier(brand)
+    site = await fetch_site(brand)
     plan = plan_changes(supplier, site)
     result = await apply_plan(woo_mod, plan) if apply else None
     out_dir = out_dir or _DATA
     ts = time.strftime("%Y%m%d-%H%M%S")
-    out = os.path.join(out_dir, f"citizen-{'applied' if apply else 'dryrun'}-{ts}.xlsx")
+    tag = "citizen" if brand == "citizen" else brand
+    out = os.path.join(out_dir, f"{tag}-{'applied' if apply else 'dryrun'}-{ts}.xlsx")
     build_report(plan, meta, out, applied=apply, apply_result=result)
     return {"plan": plan, "meta": meta, "result": result, "xlsx": out, "summary": summarize(plan)}
