@@ -55,7 +55,7 @@ def resolve_brand(name):
     return tb_term, site_term, canon, tb_key
 
 
-def run(brand_name, offset=0, batch=100):
+def run(brand_name, offset=0, batch=None):
     tb_term, site_term, canon, _key = resolve_brand(brand_name)
     if not tb_term:
         for oid in J._recipients():
@@ -63,12 +63,14 @@ def run(brand_name, offset=0, batch=100):
                   "text": f"❌ برندِ «{brand_name}» در ttbol نگاشت نشده. موجود: {'، '.join(sorted(BRANDS))}"})
         return 1
     for oid in J._recipients():
-        J._tg("sendMessage", {"chat_id": str(oid), "text": f"⏳ استخراجِ «{canon}» از competitor-shop.example…"})
+        J._tg("sendMessage", {"chat_id": str(oid),
+              "text": f"⏳ استخراجِ کاملِ «{canon}» از competitor-shop.example… (کل برند، ممکن است چند دقیقه طول بکشد)"})
     prods = ttbol.list_brand(tb_term)
     have = J.site_refs_for(site_term)
     new = [p for p in prods if p.get("ref") and p["ref"].upper().replace(" ", "") not in have]
     total_new = len(new)
-    chunk = new[offset:offset + batch]
+    # پیش‌فرض: کلِ برند در یک فایل (batch=None). offset فقط برای ادامهٔ دستی.
+    chunk = new[offset:] if batch is None else new[offset:offset + batch]
     rows = [(ttbol_map.map_product(p, canon),
              {"title": p["name"], "price_toman": p["price"], "in_stock": p["in_stock"],
               "image": p["image"], "url": p["url"]}) for p in chunk]
@@ -76,10 +78,14 @@ def run(brand_name, offset=0, batch=100):
     imgs = J._build_excel(rows, canon, ts)
     with open(ts, "rb") as f:
         data = f.read()
-    nxt = offset + batch
-    more = f"\n\nبرای بستهٔ بعدی از {nxt} دوباره بزن." if nxt < total_new else "\n\nآخرین بسته بود."
+    if batch is None:
+        span, more = f"کلِ برند: {len(rows)} محصول", "\n\n✅ کاملِ این برند استخراج شد."
+    else:
+        nxt = offset + batch
+        span = f"این بسته: {offset + 1}–{offset + len(chunk)} ({len(rows)} محصول)"
+        more = f"\n\nبرای بستهٔ بعدی از {nxt} دوباره بزن." if nxt < total_new else "\n\nآخرین بسته بود."
     cap = (f"📘 competitor-shop.example — «{canon}» (محصولاتی که روی سایت نداریم)\n\n"
-           f"• کلِ جدید: {total_new}\n• این بسته: {offset + 1}–{offset + len(chunk)} ({len(rows)} محصول، {imgs} عکس)\n\n"
+           f"• کلِ جدید: {total_new}\n• {span}، {imgs} عکس\n\n"
            f"قوانینِ ttbol اعمال شده. با عکس تطبیق بده.{more}")
     for oid in J._recipients():
         J._tg("sendDocument", {"chat_id": str(oid), "caption": cap},

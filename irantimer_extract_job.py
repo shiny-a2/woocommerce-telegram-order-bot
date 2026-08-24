@@ -164,7 +164,7 @@ def _build_excel(rows_details, brand, path):
     return imgs
 
 
-def run(brand_name, offset=0, batch=100):
+def run(brand_name, offset=0, batch=None):
     bid, term, canon = resolve_brand(brand_name)
     if not bid:
         for oid in _recipients():
@@ -172,12 +172,14 @@ def run(brand_name, offset=0, batch=100):
                 "text": f"❌ برندِ «{brand_name}» در نگاشتِ کاتالوگِ منبع نیست. برندهای موجود: {'، '.join(sorted(set(BRANDS)))}"})
         return 1
     for oid in _recipients():
-        _tg("sendMessage", {"chat_id": str(oid), "text": f"⏳ در حالِ استخراجِ «{canon}» از کاتالوگِ منبع… (کمی طول می‌کشد)"})
+        _tg("sendMessage", {"chat_id": str(oid),
+            "text": f"⏳ در حالِ استخراجِ کاملِ «{canon}» از کاتالوگِ منبع… (کل برند، ممکن است چند دقیقه طول بکشد)"})
     prods = it.list_products(bid, 1)
     have = site_refs_for(term)
     new = [p for p in prods if p.get("ref") and p["ref"].upper().replace(" ", "") not in have]
     total_new = len(new)
-    chunk = new[offset:offset + batch]
+    # پیش‌فرض: کلِ برند در یک فایل (batch=None). offset فقط برای ادامهٔ دستی.
+    chunk = new[offset:] if batch is None else new[offset:offset + batch]
     rows_details = []
     for p in chunk:
         try:
@@ -189,10 +191,14 @@ def run(brand_name, offset=0, batch=100):
     imgs = _build_excel(rows_details, canon, ts_path)
     with open(ts_path, "rb") as f:
         data = f.read()
-    nxt = offset + batch
-    more = f"\n\nبرای {min(batch, total_new - nxt)} محصولِ بعدی، دوباره درخواست بده (از {nxt})." if nxt < total_new else "\n\nاین آخرین بسته بود."
+    if batch is None:
+        span, more = f"کلِ برند: {len(rows_details)} محصول", "\n\n✅ کاملِ این برند استخراج شد."
+    else:
+        nxt = offset + batch
+        span = f"این بسته: {offset+1} تا {offset+len(chunk)} ({len(rows_details)} محصول)"
+        more = f"\n\nبرای {min(batch, total_new - nxt)} محصولِ بعدی، دوباره درخواست بده (از {nxt})." if nxt < total_new else "\n\nاین آخرین بسته بود."
     cap = (f"📥 «{canon}» — محصولاتِ جدید (که روی سایت نداریم)\n\n"
-           f"• کلِ جدید: {total_new}\n• این بسته: {offset+1} تا {offset+len(chunk)} ({len(rows_details)} محصول، {imgs} عکس)\n\n"
+           f"• کلِ جدید: {total_new}\n• {span}، {imgs} عکس\n\n"
            f"قوانینت اعمال شده. با عکس تطبیق بده و اصلاحات را ریپلای کن.{more}")
     ok = True
     for oid in _recipients():
