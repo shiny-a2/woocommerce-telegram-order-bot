@@ -197,6 +197,9 @@ def _main_menu():
          InlineKeyboardButton("📦 در انتظار ارسال", callback_data="rep:pending")],
         [InlineKeyboardButton("📞 پیگیری رهاشده‌ها", callback_data="followup"),
          InlineKeyboardButton("📊 نتایج پیگیری", callback_data="outcomes")],
+        [InlineKeyboardButton("🖼 تصاویرِ محصولات", callback_data="menu:mediaimg"),
+         InlineKeyboardButton("🔎 استخراجِ برند", callback_data="menu:brand")],
+        [InlineKeyboardButton("💎 سیتیزن", callback_data="menu:citizen")],
         [InlineKeyboardButton("📄 خروجی اکسل (این ماه)", callback_data="csv:month")],
         [InlineKeyboardButton("💰 حساب مالی", callback_data="finance:cur")],
         [InlineKeyboardButton("🔍 جستجوی سفارش", callback_data="search")],
@@ -1480,6 +1483,27 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text("📆 یک ماه را انتخاب کنید:", reply_markup=_months_menu(int(data.split(":")[1])))
         elif data == "menu:analytics":
             await q.edit_message_text("📈 آمار و تحلیل — یک گزینه را انتخاب کنید:", reply_markup=_analytics_menu())
+        elif data == "menu:mediaimg":   # 🖼 تصاویرِ محصولات (ادمین‌ها؛ اپراتور از /media_images)
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ اعمالِ درجِ تصاویر", callback_data="mediaimg:apply")],
+                [InlineKeyboardButton("🖼 پیش‌نمایش (اکسلِ بی‌عکس‌ها)", callback_data="mediaimg:preview")],
+                [InlineKeyboardButton("⬅️ بازگشت", callback_data="menu:main")]])
+            await q.edit_message_text(
+                "🖼 <b>تصاویرِ محصولات</b>\nمحصولاتِ بی‌عکسِ اخیر را با کتابخانهٔ رسانه (بر اساسِ رفرنس) تطبیق می‌دهد.\n"
+                "• «پیش‌نمایش» → اکسلِ کامل: کدام محصول بی‌عکس است و کدام رسانهٔ متناظر دارد (بدونِ نوشتن).\n"
+                "• «اعمال» → عکسِ شاخص+گالری درج می‌شود؛ اکسل می‌گوید کدام درج شد و کدام نشد و چرا.",
+                reply_markup=kb, parse_mode=ParseMode.HTML)
+        elif data == "menu:brand":     # 🔎 استخراجِ برند از منابع
+            rows = _brand_site_kb().inline_keyboard + [[InlineKeyboardButton("⬅️ بازگشت", callback_data="menu:main")]]
+            await q.edit_message_text(
+                "🔎 <b>استخراجِ برند</b>\nمنبع را انتخاب کن؛ بعد نامِ برند را بفرست (مثلِ «سیتیزن»). "
+                "کلِ محصولاتِ آن برند که روی سایتِ ما نیستند استخراج و اکسلش برایت می‌آید.",
+                reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
+        elif data == "menu:citizen":   # 💎 ورود/سینکِ تأمین‌کنندهٔ سیتیزن
+            rows = _citizen_kb().inline_keyboard + [[InlineKeyboardButton("⬅️ بازگشت", callback_data="menu:main")]]
+            await q.edit_message_text(
+                "💎 <b>سیتیزن</b>\nورود/تمدیدِ توکنِ تأمین‌کننده و نمونهٔ محصولات (سینکِ روزانه خودکار است).",
+                reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
         elif data.startswith("finance:"):   # «حساب مالی» — خلاصهٔ مالیِ ماهانه (فقط‌ادمین، فقط پیوی)
             arg = data.split(":", 1)[1]
             month = wt_finance.cur_month() if arg == "cur" else arg
