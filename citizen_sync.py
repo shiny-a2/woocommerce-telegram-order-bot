@@ -89,14 +89,22 @@ async def fetch_site(brand: str = "citizen") -> list:
 
 # ---------- پلن ----------
 def plan_changes(supplier: dict, site: list) -> dict:
-    """محاسبهٔ خالص (بدونِ I/O). قیمت مستقیم؛ موجودی فقط وضعیت؛ سایتِ‌نبود‌در‌تأمین → ناموجود."""
+    """محاسبهٔ خالص (بدونِ I/O). قیمت مستقیم؛ موجودی فقط وضعیت؛ سایتِ‌نبود‌در‌تأمین → ناموجود.
+
+    قانونِ مالک: محصولاتِ «موجودیِ عددی/تعدادی» (manage_stock=True) — وضعیتِ موجودی‌شان
+    هرگز عوض نمی‌شود (نه موجود، نه ناموجود)؛ فروشگاه دستی مدیریتشان می‌کند. قیمت طبقِ قانونِ
+    عادی بررسی می‌شود. محصولِ فقط‌وضعیتی (بدونِ تعداد) که در تأمین نیست → ناموجود (بدونِ سقفِ تعدادی).
+    """
     out = {"price": [], "instock": [], "outofstock": [], "no_price": [], "rows": [],
-           "unmatched_site": [], "supplier_not_site": []}
+           "unmatched_site": [], "supplier_not_site": [], "skipped_managed": []}
     site_refs = set()
     for s in site:
         ref = s["ref"]
         site_refs.add(ref)
         sup = supplier.get(ref)
+        managed = bool(s.get("manage_stock"))   # موجودیِ عددی/تعدادی → وضعیت هرگز عوض نشود
+        if managed:
+            out["skipped_managed"].append({"id": s["id"], "ref": ref, "name": s.get("name")})
         row = {"id": s["id"], "ref": ref, "name": s["name"], "cur_price": s["price"],
                "cur_status": s["status"], "in_supplier": bool(sup),
                "sup_price": sup["price"] if sup else None, "sup_count": sup["count"] if sup else None,
@@ -120,13 +128,17 @@ def plan_changes(supplier: dict, site: list) -> dict:
             elif sup["price"] > 0 and s["price"] != sup["price"]:
                 changes.append("قیمتِ ناموجود—دست‌نخورد")  # فقط گزارش؛ نوشته نمی‌شود
             want = "instock" if in_stock else "outofstock"
-            if s["status"] != want:
+            if managed:                              # تعدادی → وضعیت دست‌نخورد
+                changes.append("تعدادی — وضعیت دست‌نخورد")
+            elif s["status"] != want:
                 (out["instock"] if want == "instock" else out["outofstock"]).append({"id": s["id"], "ref": ref})
                 changes.append("→موجود" if want == "instock" else "→ناموجود")
             row["change"] = " + ".join(changes) if changes else "بدونِ تغییر"
         else:
             out["unmatched_site"].append(row)
-            if s["status"] != "outofstock":
+            if managed:                              # تعدادیِ در-تأمین-نبود → دست‌نخورد
+                row["change"] = "تعدادی — وضعیت دست‌نخورد (در تأمین نیست)"
+            elif s["status"] != "outofstock":
                 out["outofstock"].append({"id": s["id"], "ref": ref})
                 row["change"] = "در تأمین‌کننده نیست → ناموجود"
             else:
@@ -139,6 +151,7 @@ def plan_changes(supplier: dict, site: list) -> dict:
 
 def summarize(plan: dict) -> str:
     return (f"قیمت: {len(plan['price'])} · →موجود: {len(plan['instock'])} · →ناموجود: {len(plan['outofstock'])} · "
+            f"تعدادیِ‌دست‌نخورده: {len(plan.get('skipped_managed', []))} · "
             f"بی‌قیمتِ تأمین: {len(plan['no_price'])} · سایتِ‌نبود‌در‌تأمین: {len(plan['unmatched_site'])} · "
             f"تأمینِ‌نبود‌در‌سایت: {len(plan['supplier_not_site'])} · کلِ ردیف: {len(plan['rows'])}")
 

@@ -103,14 +103,14 @@ async def main() -> int:
     except Exception as e:  # noqa: BLE001
         alert_owner(f"⛔ سینکِ سیتیزن خطا داد: {type(e).__name__}. سایت دست‌نخورده.")
         return 1
-    plan = res["plan"]
-    n_oos = len(plan["outofstock"])
     log(f"پلن: {res['summary']}")
-    if n_oos > c.WT_CITIZEN_MAX_OOS:
+    # قانونِ مالک: بدونِ سقفِ تعدادی — چه ۲۰۰ چه ۷۰۰ اعمال کن. تنها گاردِ باقی‌مانده:
+    # اگر فچِ تأمین‌کننده کاملاً خالی بود (خواندنِ ناقص/خطای شبکه/توکن) → دست نگه‌دار (وگرنه همه‌چیز اشتباهاً ناموجود می‌شد).
+    sup_refs = int((res.get("meta") or {}).get("refs") or 0)
+    if sup_refs == 0:
         for oid in _recipients():
-            send_doc(oid, res["xlsx"], f"⚠️ سینکِ سیتیزن متوقف شد (احتیاط): →ناموجود={n_oos} از سقفِ {c.WT_CITIZEN_MAX_OOS} گذشت. "
-                                       f"احتمالِ خواندنِ ناقص. سایت دست‌نخورده. اگر درست است دستی تأیید کن.")
-        log("HOLD: oos بیش از سقف.")
+            send_doc(oid, res["xlsx"], "⚠️ سینکِ سیتیزن متوقف شد: فهرستِ تأمین‌کننده خالی برگشت (خواندنِ ناقص یا خطای شبکه/توکن). سایت دست‌نخورده.")
+        log("HOLD: فچِ تأمین‌کننده خالی.")
         return 2
 
     apply = c.WT_CITIZEN_APPLY

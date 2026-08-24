@@ -123,21 +123,11 @@ async def main() -> int:
     # ۲) واکشیِ محصولاتِ برند + پلن (یک‌بار)
     products = await ps.fetch_brand_products(woo)
     plan = ps.plan_changes(prices, products)
-    n_oos = len(plan["set_outofstock"])
-    n_all = len(plan["price_exact"]) + len(plan["price_family"]) + len(plan["set_instock"]) + n_oos
     log(f"پلن: {ps.summarize(plan)} | کانال={n_ref} رفرنس، اسنپ‌شات={age_h:.1f}h، محصولاتِ برند={len(products)}")
 
-    # ۳) گاردِ دامنهٔ تغییر (ضدِ فاجعهٔ خواندنِ خراب)
-    if n_oos > c.WT_PRICESYNC_MAX_OOS or n_all > c.WT_PRICESYNC_MAX_CHANGES:
-        xlsx = os.path.join(_DATA, f"pricesync-HOLD-{_ts()}.xlsx")
-        rep.build_excel(plan, products, meta, xlsx, applied=False)
-        log(f"⚠️ دامنهٔ بزرگ → نگه داشته شد (oos={n_oos}/{c.WT_PRICESYNC_MAX_OOS}, total={n_all}/{c.WT_PRICESYNC_MAX_CHANGES}).")
-        for oid in _owners():
-            send_doc(oid, xlsx, (f"⚠️ سینکِ خودکار متوقف شد (احتیاط) — سایت دست‌نخورده:\n"
-                                 f"→ناموجود={n_oos} (سقف {c.WT_PRICESYNC_MAX_OOS})\n"
-                                 f"کلِ تغییرات={n_all} (سقف {c.WT_PRICESYNC_MAX_CHANGES})\n"
-                                 f"اگر درست است، دستی تأیید کن."))
-        return 2
+    # ۳) قانونِ مالک: بدونِ سقفِ تعدادی — چه ۲۰۰ چه ۷۰۰ اعمال کن.
+    #    گاردِ خواندنِ ناقص همچنان برقرار است (MIN_REFS در بالا + کهنگیِ اسنپ‌شات)،
+    #    پس فاجعهٔ «همه‌چیز اشتباهاً ناموجود» با کمبودِ رفرنس‌های کانال گرفته می‌شود، نه با شمارشِ تغییرات.
 
     # ۴) اعمال (یا فقط گزارش اگر APPLY خاموش)
     apply = c.WT_PRICESYNC_APPLY
