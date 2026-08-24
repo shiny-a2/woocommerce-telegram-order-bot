@@ -149,9 +149,11 @@ async def send_card(app: Application, chat_id, photos, caption) -> int:
     if photos:
         items = [InputMediaPhoto(media=photos[0], caption=caption, parse_mode=ParseMode.HTML)]
         items += [InputMediaPhoto(media=d) for d in photos[1:]]
-        msgs = await app.bot.send_media_group(chat_id=chat_id, media=items)
+        # protect_content: کارتِ سفارش دیتای مشتری دارد → غیرقابلِ فوروارد/کپی/ذخیره
+        msgs = await app.bot.send_media_group(chat_id=chat_id, media=items, protect_content=True)
         return msgs[0].message_id
-    msg = await app.bot.send_message(chat_id=chat_id, text=caption, parse_mode=ParseMode.HTML)
+    msg = await app.bot.send_message(chat_id=chat_id, text=caption, parse_mode=ParseMode.HTML,
+                                     protect_content=True)
     return msg.message_id
 
 
@@ -850,7 +852,7 @@ async def _send_newcard(bot, chat_id, lead, phone):
     for _ in range(2):
         try:
             return await bot.send_message(chat_id, _newlead_text(lead), parse_mode=ParseMode.HTML,
-                                          reply_markup=_newlead_kb(phone))
+                                          reply_markup=_newlead_kb(phone), protect_content=True)
         except RetryAfter as e:  # سقفِ نرخ → همان‌قدر صبر و یک تلاشِ دیگر
             await asyncio.sleep(float(getattr(e, "retry_after", 5)) + 1)
         except Exception as e:  # noqa: BLE001
@@ -980,7 +982,7 @@ async def push_leads(app, days, statuses):
         if db.lead_sent(o.get("id")):
             continue
         try:
-            await app.bot.send_message(group, text=reports.lead_text(o), reply_markup=_lead_kb(o.get("id"), (o.get("billing") or {}).get("phone")))
+            await app.bot.send_message(group, text=reports.lead_text(o), reply_markup=_lead_kb(o.get("id"), (o.get("billing") or {}).get("phone")), protect_content=True)
             db.mark_lead(o.get("id"))
             sent += 1
         except Exception:
@@ -1169,7 +1171,7 @@ async def _send_remaining_cards(q, context) -> None:
         try:
             phone = d.get("phone") or ""
             await context.bot.send_message(group, _due_text(d), parse_mode=ParseMode.HTML,
-                                           reply_markup=_due_kb(phone))
+                                           reply_markup=_due_kb(phone), protect_content=True)
             db.mark_due_sent(f"{phone}|{d.get('next_follow_up_gmt') or ''}")
             sent += 1
             await asyncio.sleep(0.4)
@@ -1185,7 +1187,7 @@ async def _send_remaining_cards(q, context) -> None:
             continue
         try:
             await context.bot.send_message(group, _newlead_text(L), parse_mode=ParseMode.HTML,
-                                           reply_markup=_newlead_kb(phone))
+                                           reply_markup=_newlead_kb(phone), protect_content=True)
             db.mark_due_sent(key)
             nl_sent += 1
             sent += 1

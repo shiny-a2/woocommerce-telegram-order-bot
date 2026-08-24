@@ -75,7 +75,8 @@ async def _push_one_lead(app, oid):
     try:
         phone = (o.get("billing") or {}).get("phone")
         await app.bot.send_message(
-            telegram_io._followup_group(), text=reports.lead_text(o), reply_markup=telegram_io._lead_kb(oid, phone)
+            telegram_io._followup_group(), text=reports.lead_text(o), reply_markup=telegram_io._lead_kb(oid, phone),
+            protect_content=True,
         )
         db.mark_lead(oid)
         print(f"[leads] لیدِ {o.get('status')} #{oid} لحظه‌ای ارسال شد.")
@@ -192,7 +193,8 @@ async def _maybe_morning_worklist(app):
     for d, _key in recent:
         groups.setdefault(d.get("assigned_name") or "بدونِ مسئول", []).append(d)
     try:
-        await app.bot.send_message(group, text=telegram_io._worklist_text(groups), parse_mode="HTML")
+        await app.bot.send_message(group, text=telegram_io._worklist_text(groups), parse_mode="HTML",
+                                   protect_content=True)
         for _d, key in recent:  # تا یادآوریِ تکیِ همین‌ها دوباره نیاید
             db.mark_due_sent(key)
         print(f"[worklist] کارِ امروز ({len(recent)} پیگیری) ارسال شد.")
@@ -227,7 +229,7 @@ async def _maybe_due_reminders(app):
             continue
         try:
             await app.bot.send_message(group, text=telegram_io._due_text(d), parse_mode="HTML",
-                                       reply_markup=telegram_io._due_kb(d.get("phone")))
+                                       reply_markup=telegram_io._due_kb(d.get("phone")), protect_content=True)
             db.mark_due_sent(key)
             sent += 1
         except Exception as e:
@@ -274,7 +276,7 @@ async def _poll_new_leads(app):
             continue
         try:
             await app.bot.send_message(group, text=telegram_io._newlead_text(L), parse_mode="HTML",
-                                       reply_markup=telegram_io._newlead_kb(L.get("phone")))
+                                       reply_markup=telegram_io._newlead_kb(L.get("phone")), protect_content=True)
             last_id = int(L.get("id") or last_id)
             sent += 1
         except Exception as e:
