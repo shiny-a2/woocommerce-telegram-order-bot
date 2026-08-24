@@ -24,6 +24,11 @@ SSH_HOST = "root@source-server.example"
 SSH_KEY = os.path.join(_HERE, ".ssh", "jeweltime_ed25519")
 JT_DB = "source_products_db"
 JT_PREFIX = "wp_"
+# اعمالِ سریعِ محلی روی سرور (بدونِ شبکه/حذفِ بدنه/سربارِ per-request): اسکریپتِ PHP روی خودِ سرور،
+# جواهریان را با ووکامرس محلی به‌روز می‌کند (بوت‌استرپِ یک‌باره). به‌جای ۱۹۰۰ نوشتنِ HTTPِ ~۲.۴ثانیه‌ای.
+PHP_BIN = "/opt/cpanel/ea-php85/root/usr/bin/php"
+SERVER_APPLY = "/home/user/jewel_apply_stock.php"
+SERVER_USER = "shop"
 PRICE_DIVISOR = 100                 # دیتابیسِ jeweltime قیمت را ریال×۱۰۰ ذخیره می‌کند
 REF_ATTR = "رفرانس"                 # نامِ اتریبیوتِ رفرنس در attributesِ محصولِ جواهریان
 BRAND_TERMS = {                     # برندهای jeweltime روی جواهریان (attr pa_نام-برند id=103)
@@ -175,13 +180,38 @@ def summarize(plan: dict) -> str:
 
 
 # ---------- اعمال (فقط موجودی/تعداد؛ قیمت هرگز نوشته نمی‌شود) ----------
+def apply_plan_server(plan: dict) -> dict:
+    """اعمالِ سریعِ محلی: تغییراتِ (id, qty) را به اسکریپتِ PHP روی سرور می‌فرستد (stdin)،
+    که با ووکامرسِ محلی manage_stock=true + stock_quantity را ست می‌کند. خروجی OK/ERR per خط."""
+    res = {"stock": 0, "errors": []}
+    changes = plan["stock"]
+    if not changes:
+        return res
+    lines = "".join(f"{c['id']}\t{c['new_qty']}\n" for c in changes)
+    remote = f"su -s /bin/bash {SERVER_USER} -c '{PHP_BIN} {SERVER_APPLY}'"
+    cmd = ["ssh", "-i", SSH_KEY, "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no",
+           "-o", "ConnectTimeout=20", SSH_HOST, remote]
+    r = subprocess.run(cmd, input=lines.encode("utf-8"),
+                       stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=3600)
+    for line in r.stdout.decode("utf-8", "replace").splitlines():
+        parts = line.split("\t")
+        if parts and parts[0] == "OK":
+            res["stock"] += 1
+        elif parts and parts[0] == "ERR":
+            res["errors"].append({"id": parts[1] if len(parts) > 1 else "?",
+                                  "err": parts[2] if len(parts) > 2 else "err"})
+    if r.returncode != 0 and res["stock"] == 0:
+        res["errors"].append({"id": "-", "err": f"ssh rc={r.returncode}: {r.stderr.decode('utf-8','replace')[:160]}"})
+    return res
+
+
 async def apply_plan(woo_mod, plan: dict, limit=None) -> dict:
+    """(fallback) اعمال از راهِ WooCommerce API — کُند (per-request HTTP). مسیرِ اصلی apply_plan_server است."""
     res = {"stock": 0, "errors": []}
     for i, c in enumerate(plan["stock"]):
         if limit and i >= limit:
             break
         try:
-            # manage_stock=true + stock_quantity ⇒ ووکامرس وضعیت را از تعداد می‌سازد (۰=ناموجود)
             await woo_mod.put(f"products/{c['id']}",
                               {"manage_stock": True, "stock_quantity": c["new_qty"]})
             res["stock"] += 1
@@ -296,7 +326,7 @@ async def run(woo_mod, apply: bool = False, out_dir: str | None = None) -> dict:
     jt = fetch_jeweltime()
     jav = await fetch_shop(woo_mod)
     plan = plan_changes(jt, jav)
-    result = await apply_plan(woo_mod, plan) if apply else None
+    result = apply_plan_server(plan) if apply else None   # اعمالِ سریعِ محلی روی سرور
     out_dir = out_dir or _DATA
     import time
     ts = time.strftime("%Y%m%d-%H%M%S")
