@@ -107,8 +107,8 @@ CURRENCY_LABEL = _get("CURRENCY_LABEL", "تومان")
 SHOP_NAME = _get("SHOP_NAME", "گالری")
 # واحد فروشگاه ریال است؛ برای نمایش تومان مبلغ بر این عدد تقسیم می‌شود (۱۰). برای نمایش ریال ۱ بگذار
 MONEY_DIVISOR = _int("MONEY_DIVISOR", 10)
-# نگاشت روش‌های پرداختِ خاص به نام نمایشی (مثلاً «دیگر/سایر» = حساب مالی مجموعه)
-PAYMENT_ALIASES = {}
+# نگاشت روش‌های پرداختِ خاص به نام نمایشی (مثلاً «دیگر/سایر» = حساب آقای مالی)
+PAYMENT_ALIASES = {"دیگر": "حساب آقای مالی", "سایر": "حساب آقای مالی"}
 
 # ---------- مغزِ اختصاصیِ گزارشِ کار (ارزیابیِ AI) ----------
 OPENAI_API_KEY = _get("OPENAI_API_KEY", "")
@@ -169,7 +169,11 @@ WT_SAATI_MOBILE = _get("WT_SAATI_MOBILE", "")
 WT_CITIZEN_ENABLED = _bool("WT_CITIZEN_ENABLED", False)   # کلیدِ اصلیِ جابِ روزانهٔ سیتیزن (fail-closed)
 WT_CITIZEN_APPLY = _bool("WT_CITIZEN_APPLY", False)        # False=فقط گزارش، True=نوشتنِ واقعی
 WT_CITIZEN_OPERATOR_ID = _int("WT_CITIZEN_OPERATOR_ID", 0)  # اپراتور — مقصدِ گزارش
-WT_CITIZEN_MAX_OOS = _int("WT_CITIZEN_MAX_OOS", 200)       # اگر →ناموجود > این → نگه‌دار، هشدار (ضدِ فاجعه)
+WT_CITIZEN_MAX_OOS = _int("WT_CITIZEN_MAX_OOS", 200)       # (منسوخ) دیگر استفاده نمی‌شود؛ قانونِ مالک: بدونِ سقفِ تعدادی
+
+# سینکِ jeweltime → جواهریان (آینهٔ موجود/ناموجود + تعدادِ عددیِ برندهای مبدأ؛ قیمت فقط گزارش)
+WT_JEWEL_ENABLED = _bool("WT_JEWEL_ENABLED", False)        # کلیدِ اصلیِ جابِ روزانهٔ jeweltime (fail-closed)
+WT_JEWEL_APPLY = _bool("WT_JEWEL_APPLY", False)            # False=فقط گزارش، True=نوشتنِ موجودی/تعداد (قیمت هرگز)
 
 # درجِ خودکارِ تصاویر (کتابخانهٔ رسانه → محصولاتِ بی‌عکس، بر اساسِ رفرنس)
 WT_MEDIAIMG_APPLY = _bool("WT_MEDIAIMG_APPLY", False)      # False=فقط گزارشِ dry-run، True=نوشتنِ واقعی
