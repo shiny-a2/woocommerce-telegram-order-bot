@@ -149,11 +149,11 @@ async def send_card(app: Application, chat_id, photos, caption) -> int:
     if photos:
         items = [InputMediaPhoto(media=photos[0], caption=caption, parse_mode=ParseMode.HTML)]
         items += [InputMediaPhoto(media=d) for d in photos[1:]]
-        # protect_content: کارتِ سفارش دیتای مشتری دارد → غیرقابلِ فوروارد/کپی/ذخیره
-        msgs = await app.bot.send_media_group(chat_id=chat_id, media=items, protect_content=True)
+        # گروهِ سفارشاتِ داخلی: کپی/فوروارد باز (به‌خواستِ مالک) — protect_content همه‌یا‌هیچ است،
+        # پس نمی‌توان فقط برای بعضی اعضا باز کرد؛ گروه داخلی است، پس برای همه باز می‌ماند.
+        msgs = await app.bot.send_media_group(chat_id=chat_id, media=items)
         return msgs[0].message_id
-    msg = await app.bot.send_message(chat_id=chat_id, text=caption, parse_mode=ParseMode.HTML,
-                                     protect_content=True)
+    msg = await app.bot.send_message(chat_id=chat_id, text=caption, parse_mode=ParseMode.HTML)
     return msg.message_id
 
 
