@@ -332,7 +332,10 @@ def caption_fields(order):
     address = "، ".join([p for p in addr_parts if p])
 
     ship_lines = order.get("shipping_lines") or []
-    shipping = ship_lines[0].get("method_title", "") if ship_lines else ""
+    # همهٔ روش‌های حمل (نه فقط اولی) — بعضی سفارش‌ها چند خطِ حمل دارند
+    shipping = "، ".join(
+        (sl.get("method_title") or "").strip() for sl in ship_lines if (sl.get("method_title") or "").strip()
+    )
 
     # تفکیکِ مالی: جمعِ قبل از تخفیفِ اقلام (subtotalِ هر آیتم قبل از تخفیف است)
     items_subtotal = sum(float(li.get("subtotal") or 0) for li in (order.get("line_items") or []))

@@ -5,8 +5,10 @@ import asyncio
 import datetime
 import html
 import io
+import os
 import re
 import time
+import uuid
 
 import jdatetime
 
@@ -113,14 +115,17 @@ def build_caption(order, stock_location=None, summary=None, items_regular=None) 
         ship = float(f.get("shipping_total") or 0)
         items_sub = float(f.get("items_subtotal") or 0)
         disc = float(f.get("discount_total") or 0)   # تخفیفِ کوپن/سفارش
+        total_amt = float(f.get("total") or 0)       # مبلغِ کلِ سفارش (پس از تخفیف، شاملِ حمل)
     except (TypeError, ValueError):
-        ship, items_sub, disc = 0.0, 0.0, 0.0
+        ship, items_sub, disc, total_amt = 0.0, 0.0, 0.0, 0.0
     cl_ = config.CURRENCY_LABEL
     pre = float(items_regular or 0)          # مجموعِ قیمتِ اصلی (قبل از حراج)
     if pre < items_sub:                      # اگر داده نشد یا کمتر بود → همان جمعِ آیتم‌ها
         pre = items_sub
     # تخفیفِ کل = (قیمتِ اصلی) − (پرداختیِ کالاها پس از کوپن). مستقل از مالیات/حمل تا تخفیفِ کاذب نسازد.
     total_disc = pre - (items_sub - disc)    # حراجِ محصول (pre−items_sub) + کوپن (disc)
+    # مبلغِ خالصِ کالاها = کل − حمل (همیشه با هزینهٔ حمل جمع می‌شود و مبلغِ کل را می‌دهد)
+    products_amt = total_amt - ship
     if total_disc > 0.5:
         lines.append(f"🏷️ قیمت قبل تخفیف: {reports.fmt_money(pre)} {cl_}")
         cps = [c for c in (f.get('coupons') or []) if c]
@@ -128,11 +133,13 @@ def build_caption(order, stock_location=None, summary=None, items_regular=None) 
         pct = round(total_disc / pre * 100) if pre > 0 else 0
         pct_fa = str(pct).translate(str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹"))
         lines.append(f"➖ تخفیف {pct_fa}٪{cp_txt}: {reports.fmt_money(total_disc)} {cl_}")
+    # تفکیکِ دقیقِ پرداختی — همیشه (مگر بخشِ «اصلاحات» خودش پرداختی را نشان دهد):
+    # مبلغِ کالاها + هزینهٔ ارسال = مبلغِ کلِ پرداختی
+    if not summary.get("has_payment"):
+        lines.append(f"🛍️ مبلغ کالاها: {reports.fmt_money(products_amt)} {cl_}")
         if ship > 0:
             lines.append(f"🚚 هزینه ارسال: {reports.fmt_money(ship)} {cl_}")
-        lines.append(f"💰 مبلغ پرداختی: {reports.fmt_money(f['total'])} {cl_}")
-    elif not summary.get("has_payment"):
-        lines.append(f"💰 مبلغ پرداختی: {reports.fmt_money(f['total'])} {cl_}")
+        lines.append(f"💰 مبلغ کل پرداختی: {reports.fmt_money(total_amt)} {cl_}")
     if corrections:
         lines.append("")
         lines.append("➖ اصلاحات سفارش:")
@@ -200,6 +207,8 @@ def _main_menu():
         [InlineKeyboardButton("🖼 تصاویرِ محصولات", callback_data="menu:mediaimg"),
          InlineKeyboardButton("🔎 استخراجِ برند", callback_data="menu:brand")],
         [InlineKeyboardButton("💎 سیتیزن", callback_data="menu:citizen")],
+        [InlineKeyboardButton("📦 به‌روزرسانی فایل دیجی‌کالا", callback_data="digikala:start")],
+        [InlineKeyboardButton("💲 قیمت مرجع درخواستی دیجی‌کالا", callback_data="digiref:start")],
         [InlineKeyboardButton("📄 خروجی اکسل (این ماه)", callback_data="csv:month")],
         [InlineKeyboardButton("💰 حساب مالی", callback_data="finance:cur")],
         [InlineKeyboardButton("🔍 جستجوی سفارش", callback_data="search")],
@@ -238,6 +247,141 @@ def _months_menu(jy):
 
 def _back_kb():
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔙 منو", callback_data="menu:main")]])
+
+
+# ---------- فایلِ به‌روزرسانیِ دیجی‌کالا — مالک + اپراتور ----------
+def _digikala_can(uid) -> bool:
+    return uid in config.ADMIN_USER_IDS or uid == getattr(config, "WT_DIGIKALA_OPERATOR_ID", 0)
+
+
+def _digikala_kb():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📦 موجودی، فعال و قیمت فروش", callback_data="digikala:start")],
+        [InlineKeyboardButton("💲 قیمت مرجع درخواستی", callback_data="digiref:start")],
+    ])
+
+
+async def cmd_digikala(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Entry point kept available to the delegated operator even without the admin menu."""
+    msg = update.effective_message
+    user = update.effective_user
+    if not msg or not user or not _digikala_can(user.id):
+        return
+    if update.effective_chat and update.effective_chat.type != "private":
+        await msg.reply_text("🔒 این ابزار فقط در گفت‌وگوی خصوصی با ربات کار می‌کند.")
+        return
+    await msg.reply_text(
+        "📦 ابزارهای فایل دیجی‌کالا\n\n"
+        "نوع خروجی را انتخاب کن. هر ابزار دو فایل اکسل می‌گیرد و فقط ستون‌های مجاز همان ابزار را تغییر می‌دهد.",
+        reply_markup=_digikala_kb(),
+    )
+
+
+async def _handle_digikala_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Receive the two workbooks in sequence and return True when this update was consumed."""
+    msg = update.message
+    user = update.effective_user
+    phase = context.user_data.get("digikala_phase")
+    if not phase or not msg or not msg.document or not user or not _digikala_can(user.id):
+        return False
+    if update.effective_chat and update.effective_chat.type != "private":
+        return False
+    if not (msg.document.file_name or "").lower().endswith(".xlsx"):
+        await msg.reply_text("⚠️ فقط فایل Excel با پسوند .xlsx بفرست.")
+        return True
+
+    upload_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "digikala_uploads")
+    os.makedirs(upload_dir, exist_ok=True)
+    suffix = uuid.uuid4().hex
+    path = os.path.join(upload_dir, f"{user.id}_{phase}_{suffix}.xlsx")
+    telegram_file = await context.bot.get_file(msg.document.file_id)
+    await telegram_file.download_to_drive(path)
+
+    if phase == "reference":
+        context.user_data["digikala_reference"] = path
+        context.user_data["digikala_phase"] = "seller"
+        await msg.reply_text("✅ فایل مرجع دریافت شد. حالا فایل دانلودشده از پنل فروشندگان دیجی‌کالا را بفرست.")
+        return True
+
+    reference_path = context.user_data.get("digikala_reference")
+    output_path = os.path.join(upload_dir, f"digikala_updated_{user.id}_{suffix}.xlsx")
+    await msg.reply_text("⏳ فایل دیجی‌کالا دریافت شد؛ در حال بررسی و ساخت خروجی…")
+    try:
+        import digikala_bulk
+        stats = await asyncio.to_thread(digikala_bulk.process, reference_path, path, output_path)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[digikala] {exc!r}")
+        await msg.reply_text(f"❌ خروجی ساخته نشد: {exc}\nفایل دیجی‌کالا را دوباره بفرست یا «شروع» را از نو بزن.")
+        return True
+
+    for key in ("digikala_phase", "digikala_reference"):
+        context.user_data.pop(key, None)
+    caption = ("✅ فایل آمادهٔ بارگذاری در دیجی‌کالا است.\n\n"
+               f"• ردیف‌های بررسی‌شده: {stats['rows']}\n"
+               f"• تطبیقِ برند و رفرنس: {stats['matched_reference']}\n"
+               f"• قیمت‌های تغییرکرده: {stats['price_changed']}\n"
+               f"• موجودی‌های تغییرکرده: {stats['stock_changed']}\n"
+               f"• ردیف‌های فعال: {stats['active']}")
+    with open(output_path, "rb") as output_file:
+        await context.bot.send_document(
+            chat_id=msg.chat_id,
+            document=InputFile(output_file, filename="digikala_updated.xlsx"),
+            caption=caption,
+        )
+    return True
+
+
+async def _handle_digikala_reference_price_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Receive price file then 6-column Digikala file for requested-reference-price output."""
+    msg = update.message
+    user = update.effective_user
+    phase = context.user_data.get("digiref_phase")
+    if not phase or not msg or not msg.document or not user or not _digikala_can(user.id):
+        return False
+    if update.effective_chat and update.effective_chat.type != "private":
+        return False
+    if not (msg.document.file_name or "").lower().endswith(".xlsx"):
+        await msg.reply_text("⚠️ فقط فایل Excel با پسوند .xlsx بفرست.")
+        return True
+
+    upload_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "digikala_uploads")
+    os.makedirs(upload_dir, exist_ok=True)
+    suffix = uuid.uuid4().hex
+    path = os.path.join(upload_dir, f"{user.id}_digiref_{phase}_{suffix}.xlsx")
+    telegram_file = await context.bot.get_file(msg.document.file_id)
+    await telegram_file.download_to_drive(path)
+
+    if phase == "price":
+        context.user_data["digiref_price_file"] = path
+        context.user_data["digiref_phase"] = "digikala"
+        await msg.reply_text("✅ فایل «قیمت من» دریافت شد. حالا فایل ۶ستونهٔ دیجی‌کالا را بفرست.")
+        return True
+
+    price_path = context.user_data.get("digiref_price_file")
+    output_path = os.path.join(upload_dir, f"digikala_requested_reference_price_{user.id}_{suffix}.xlsx")
+    await msg.reply_text("⏳ فایل دیجی‌کالا دریافت شد؛ فقط ستون «قیمت مرجع درخواستی» در حال تکمیل است…")
+    try:
+        import digikala_reference_price
+        stats = await asyncio.to_thread(digikala_reference_price.process, price_path, path, output_path)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[digiref] {exc!r}")
+        await msg.reply_text(f"❌ خروجی ساخته نشد: {exc}\nفایل دیجی‌کالا را دوباره بفرست یا «شروع» را از نو بزن.")
+        return True
+
+    for key in ("digiref_phase", "digiref_price_file"):
+        context.user_data.pop(key, None)
+    caption = ("✅ فایل قیمت مرجع آماده است. فقط ستون E «قیمت مرجع درخواستی» تغییر کرده است.\n\n"
+               f"• ردیف‌های بررسی‌شده: {stats['rows']}\n"
+               f"• تطبیق برند و رفرنس: {stats['matched']}\n"
+               f"• قیمت‌های واردشده: {stats['filled']}\n"
+               f"• خانه‌های E پاک‌شده برای ردیفِ بی‌تطبیق: {stats['cleared']}")
+    with open(output_path, "rb") as output_file:
+        await context.bot.send_document(
+            chat_id=msg.chat_id,
+            document=InputFile(output_file, filename="digikala_requested_reference_price.xlsx"),
+            caption=caption,
+        )
+    return True
 
 
 # ---------- تأمین‌کنندهٔ سیتیزن (app.supplier.example) — لاگینِ OTP از طریقِ دکمه (ادمین‌ها + اپراتور) ----------
@@ -340,18 +484,18 @@ async def cmd_media_images(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=_mediaimg_kb(show_apply=True))
 
 
-# ---------- گرفتنِ اکسلِ برند از کاتالوگِ منبع (ETL) — ادمین‌ها + اپراتور ----------
+# ---------- گرفتنِ اکسلِ برند از ایران‌تایمر (ETL) — ادمین‌ها + اپراتور ----------
 # منبع‌های استخراج → (فایلِ جاب، نامِ envِ برند، نامِ envِ آفست، برچسب)
 _BRAND_SITES = {
-    "irantimer": ("irantimer_extract_job.py", "IT_BRAND", "IT_OFFSET", "کاتالوگِ منبع"),
-    "ttbol": ("ttbol_extract_job.py", "TB_BRAND", "TB_OFFSET", "competitor-shop.example"),
+    "irantimer": ("irantimer_extract_job.py", "IT_BRAND", "IT_OFFSET", "ایران‌تایمر"),
+    "ttbol": ("ttbol_extract_job.py", "TB_BRAND", "TB_OFFSET", "ttbol.ir"),
 }
 
 
 def _brand_site_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📗 کاتالوگِ منبع", callback_data="brandsite:irantimer")],
-        [InlineKeyboardButton("📘 competitor-shop.example", callback_data="brandsite:ttbol")],
+        [InlineKeyboardButton("📗 ایران‌تایمر", callback_data="brandsite:irantimer")],
+        [InlineKeyboardButton("📘 ttbol.ir", callback_data="brandsite:ttbol")],
     ])
 
 
@@ -372,17 +516,17 @@ def _spawn_extract(brand: str, site: str = "irantimer", offset: int = 0):
 
 
 async def cmd_extract_brand(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """دکمهٔ «گرفتنِ اکسلِ برندِ کاتالوگِ منبع» (ادمین‌ها + اپراتور، فقط پیوی)."""
+    """دکمهٔ «گرفتنِ اکسلِ برندِ ایران‌تایمر» (ادمین‌ها + اپراتور، فقط پیوی)."""
     u = update.effective_user
     if not u or not _mediaimg_can(u.id):
         return
     if update.effective_chat and update.effective_chat.type != "private":
         await update.message.reply_text("🔒 فقط در چتِ خصوصی با ربات.")
         return
-    if context.args:  # /brand <name> → پیش‌فرض کاتالوگِ منبع (سازگاریِ عقب)
+    if context.args:  # /brand <name> → پیش‌فرض ایران‌تایمر (سازگاریِ عقب)
         brand = " ".join(context.args)
         _spawn_extract(brand, "irantimer")
-        await update.message.reply_text(f"⏳ «{brand}» از کاتالوگِ منبع شروع شد؛ اکسلِ محصولاتِ جدید می‌آید.")
+        await update.message.reply_text(f"⏳ «{brand}» از ایران‌تایمر شروع شد؛ اکسلِ محصولاتِ جدید می‌آید.")
     else:
         await update.message.reply_text("📥 محصولاتِ برند را از کدام سایت استخراج کنم؟", reply_markup=_brand_site_kb())
 
@@ -406,6 +550,10 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """آپلودِ اکسلِ اصلاح‌شده توسطِ اپراتور/ادمین در پیوی → دکمهٔ درج."""
     msg = update.message
     u = update.effective_user
+    if await _handle_digikala_reference_price_document(update, context):
+        return
+    if await _handle_digikala_document(update, context):
+        return
     if not msg or not msg.document or not u or not _mediaimg_can(u.id):
         return
     if update.effective_chat and update.effective_chat.type != "private":
@@ -1371,7 +1519,11 @@ def _worklist_text(groups: dict) -> str:
 
 async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.effective_message
-    if not msg or not _authorized(update):
+    if not msg:
+        return
+    if not _authorized(update):
+        if update.effective_user and _digikala_can(update.effective_user.id):
+            await cmd_digikala(update, context)
         return
     if update.effective_chat and update.effective_chat.type != "private":
         await msg.reply_text("🔒 منوی مدیریت فقط در چتِ خصوصی با ربات کار می‌کند.")
@@ -1418,6 +1570,36 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await q.edit_message_text(f"❌ ارسالِ کد نشد: {res.get('msg') or '—'}\nدوباره امتحان کن.",
                                       reply_markup=_citizen_kb())
+        return
+    if data == "digikala:start":
+        if not q.from_user or not _digikala_can(q.from_user.id):
+            await _safe_answer(q, "دسترسی ندارید.", show_alert=True)
+            return
+        if q.message and q.message.chat and q.message.chat.type != "private":
+            await _safe_answer(q, "فقط در گفت‌وگوی خصوصی با ربات.", show_alert=True)
+            return
+        await _safe_answer(q)
+        for key in ("digikala_phase", "digikala_reference"):
+            context.user_data.pop(key, None)
+        context.user_data["digikala_phase"] = "reference"
+        await q.edit_message_text(
+            "📥 ابتدا فایل «قیمت و موجودی من» را بفرست.\n\n"
+            "پس از دریافت آن، ربات فایل دانلودشده از پنل فروشندگان دیجی‌کالا را می‌خواهد.")
+        return
+    if data == "digiref:start":
+        if not q.from_user or not _digikala_can(q.from_user.id):
+            await _safe_answer(q, "دسترسی ندارید.", show_alert=True)
+            return
+        if q.message and q.message.chat and q.message.chat.type != "private":
+            await _safe_answer(q, "فقط در گفت‌وگوی خصوصی با ربات.", show_alert=True)
+            return
+        await _safe_answer(q)
+        for key in ("digiref_phase", "digiref_price_file"):
+            context.user_data.pop(key, None)
+        context.user_data["digiref_phase"] = "price"
+        await q.edit_message_text(
+            "📥 ابتدا فایل «قیمت من» را بفرست (A: برند، B: رفرنس، C: قیمت جدید).\n\n"
+            "سپس فایل ۶ستونهٔ دیجی‌کالا را بفرست تا فقط ستون E «قیمت مرجع درخواستی» تکمیل شود.")
         return
     if data.startswith("brandsite:"):   # انتخابِ منبعِ استخراجِ برند — ادمین‌ها + اپراتور
         if not q.from_user or not _mediaimg_can(q.from_user.id):
@@ -1595,7 +1777,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def _record_atefeh_qa(user, text: str) -> str:
-    """سؤال/بازخوردِ اپراتور (بازبینیِ دفترچه/نمونهٔ کاتالوگِ منبع) را برای پاسخ‌گویی ذخیره می‌کند."""
+    """سؤال/بازخوردِ اپراتور (بازبینیِ دفترچه/نمونهٔ ایران‌تایمر) را برای پاسخ‌گویی ذخیره می‌کند."""
     import datetime as _dt
     import json as _json
     import os as _os
@@ -1698,7 +1880,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text(f"⏳ «{brand}» از {lbl} شروع شد؛ اکسلِ محصولاتِ جدید (بدونِ تکرارِ سایت) می‌آید.")
         return
 
-    # پلِ پرسش‌وپاسخِ اپراتور (بازبینیِ دفترچه/نمونهٔ کاتالوگِ منبع): سؤال/بازخوردش را ذخیره + به مالک اطلاع.
+    # پلِ پرسش‌وپاسخِ اپراتور (بازبینیِ دفترچه/نمونهٔ ایران‌تایمر): سؤال/بازخوردش را ذخیره + به مالک اطلاع.
     # ریپلای هم گرفته می‌شود (ریپلای‌های CRM بالاتر return شده‌اند، پس اینجا فقط سؤال/بازخوردِ اوست).
     if _cu and _cu.id == getattr(config, "WT_MEDIAIMG_OPERATOR_ID", 0) \
             and update.effective_chat and update.effective_chat.type == "private" \
@@ -1861,6 +2043,7 @@ def register_handlers(app: Application):
     app.add_handler(CommandHandler("retire", worktasks.cmd_retire))
     app.add_handler(CommandHandler("unretire", worktasks.cmd_unretire))
     app.add_handler(CommandHandler("fixcaptions", cmd_fixcaptions))
+    app.add_handler(CommandHandler("digikala", cmd_digikala))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.add_handler(MessageHandler(filters.Document.ALL, on_document))
     app.add_handler(CallbackQueryHandler(on_callback))
