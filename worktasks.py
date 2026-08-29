@@ -757,9 +757,30 @@ async def _staff_context(user_id) -> str:
     return "؛ ".join(parts)
 
 
+def _close_open_tasks_for_operator(uid) -> int:
+    """اپراتور (اپراتور): با ثبتِ گزارش، همهٔ تسک‌های بازش بسته می‌شوند — گفتارش در گزارش = انجام‌شده،
+    چون کارش (دفترچه/اینستا) با فروشِ ووکامرس قابلِ‌صحت‌سنجیِ خودکار نیست. برای پرسنلِ عادی (نسیم) اجرا نمی‌شود."""
+    if int(uid or 0) not in _OPERATOR_IDS:
+        return 0
+    q = ("(  (lifecycle_state IS NOT NULL AND lifecycle_state NOT IN ('verified_done','cancelled'))"
+         " OR (lifecycle_state IS NULL AND COALESCE(status,'open') NOT IN ('done','cancelled')) )")
+    with db._lock:
+        ids = [r[0] for r in db._conn.execute(
+            f"SELECT id FROM wt_tasks WHERE assignee_id=? AND {q}", (int(uid),)).fetchall()]
+    n = 0
+    for tid in ids:
+        try:
+            _close_task_admin(tid)
+            n += 1
+        except Exception:  # noqa: BLE001
+            pass
+    return n
+
+
 async def _process_report(msg, user, text) -> None:
     """گزارش را ذخیره می‌کند، تشکر می‌کند، و اگر مغز فعال بود سؤالِ پیگیرانه می‌پرسد.
 
+    اپراتور (اپراتور): ثبتِ گزارش همهٔ تسک‌های بازش را می‌بندد. پرسنلِ عادی (نسیم) صحت‌سنجی می‌شوند.
     اگر گزارش «مرخصی/تعطیل» باشد، فقط ثبت و تأیید می‌شود (بدونِ سؤال/صحت‌سنجی/تسک/نمره).
     """
     nm = _staff_name(user.id) or user.full_name  # نامِ نمایشیِ فارسیِ ثبت‌شده (اگر قفل شده باشد)
@@ -784,11 +805,13 @@ async def _process_report(msg, user, text) -> None:
             wt_hr.record_from_report(user.id, att["work_date"], att["check_in"], att["check_out"])
         except Exception as e:  # noqa: BLE001 — ثبتِ حضور نباید مسیرِ گزارش را بشکند
             print(f"[worktasks] attendance record خطا: {e!r}")
+    closed = _close_open_tasks_for_operator(user.id)  # اپراتور: گزارشش تسک‌های بازش را می‌بندد
     h, mnt = att["worked_min"] // 60, att["worked_min"] % 60
+    extra = f"\n✅ {_fa(closed)} تسکت هم با همین گزارش بسته شد. آفرین! 💪" if closed else ""
     await msg.reply_text(
         f"🌟 دمت گرم، گزارشت ثبت شد!\n"
         f"🕒 ورود {_fa(att['check_in'])} · خروج {_fa(att['check_out'])} · کارکرد {_fa(f'{h}:{mnt:02d}')}\n"
-        f"ممنون بابتِ زحمتی که امروز کشیدی 🙏💚")
+        f"ممنون بابتِ زحمتی که امروز کشیدی 🙏💚{extra}")
     if wt_brain.enabled():
         asyncio.create_task(_ai_followup(msg, user, rid, text))
     else:
