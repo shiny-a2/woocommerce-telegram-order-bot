@@ -269,11 +269,19 @@ def _set_retired(actor_id, uid, name, retire=True):
         db._conn.commit()
 
 
+# اپراتور (اپراتور): سیستم برایش تسکِ خودکارِ خزش نمی‌سازد و «انجام شد»‌ش مستقیم بسته می‌شود —
+# کارش دفترچه/اینستاست و با فروشِ ووکامرس قابلِ‌صحت‌سنجیِ خودکار نیست.
+_OPERATOR_IDS = {i for i in (config.WT_MEDIAIMG_OPERATOR_ID, config.WT_CITIZEN_OPERATOR_ID) if i}
+
+
 def _add_task(assignee_id, assignee_name, assigner_id, assigner_name, text, source_key=None, metric=None,
               ctx=None, kind="staff") -> int:
     """ساختِ تسک از طریقِ سرویسِ متمرکز (audit + idempotency + task_kind). قرارداد: id تسک، یا -1 برای dupِ source_key/رد."""
     if kind == "staff" and _staff_blocked(assignee_id):  # پرسنلِ قطع‌همکاری/غیرفعال تسکِ جدید نمی‌گیرد
         print(f"[worktasks] تسک به پرسنلِ قطع‌همکاری/غیرفعال ({assignee_id}) واگذار نشد.")
+        return -1
+    if int(assignee_id or 0) in _OPERATOR_IDS and str(assigner_name or "").startswith("🤖"):  # اپراتور تسکِ خودکار (🤖) نمی‌گیرد
+        print(f"[worktasks] تسکِ خودکار برای اپراتور ({assignee_id}) ساخته نشد (مستثنیٰ).")
         return -1
     if ctx is None:
         ctx = _mk_ctx(assigner_id, "task_create")
@@ -2607,6 +2615,8 @@ def lifecycle_done(task_id, actor_id, note=None, idem=""):
     if not t:
         return taskservice.MutationResult("not_found", task_id=task_id), None
     target = taskservice.resolve_done_target(t["verification_mode"])
+    if int(actor_id or 0) in _OPERATOR_IDS:  # اپراتور: «انجام شد»‌ش مستقیم تأیید و بسته می‌شود (بدونِ صحت‌سنجیِ فروش‌محور)
+        target = "verified_done"
     ctx = _lifecycle_ctx(actor_id, "task_transition", idem or f"tg:done:{actor_id}:{task_id}")
     res = taskservice.transition_task(ctx, task_id, target, completion_note=note)
     return res, target
