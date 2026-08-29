@@ -97,7 +97,10 @@ def build_caption(order, stock_location=None, summary=None, items_regular=None) 
         _status_line(order),
         "",
         f"💳 روش پرداخت: {_esc(f['payment'])}",
-        f"🚚 روش حمل: {_esc(f['shipping'])}",
+    ]
+    if (f.get("shipping") or "").strip():            # اگر روشِ حمل نبود، خطِ خالی نشان نده
+        lines.append(f"🚚 روش حمل: {_esc(f['shipping'])}")
+    lines += [
         f"👤 خریدار: {_esc(f['name'])}",
         f"📞 تماس: {_esc(f['phone'])}",
         f"📍 استان: {_esc(f['province'])}",
