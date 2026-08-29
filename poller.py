@@ -407,12 +407,14 @@ async def run(app):
             if cycle % 5 == 0:  # هر ~۵ دقیقه
                 await _maybe_due_reminders(app)
             await reports.prewarm()  # کش را گرم نگه دار → گزارش‌های ادمین آنی
+            if cycle % 10 == 0:  # هر ~۱۰ دقیقه: نرخِ درخواستِ ووکامرس (برای رصدِ فشار روی سایت)
+                _r = woo.req_count()
+                _p = int(db.get_meta("wc_req_mark") or _r)
+                print(f"[wc] ~{_r - _p} درخواستِ ووکامرس در ~۱۰ دقیقه ({(_r - _p) / 10:.1f}/دقیقه)")
+                db.set_meta("wc_req_mark", _r)
         except Exception as e:
+            # هیچ خطایی (disk-full/شبکه/DB) نباید حلقه را بکُشد؛ لاگ کن و سیکلِ بعد دوباره تلاش کن.
+            # همینِ حلقهٔ زنده + سینکِ افزایشی/بک‌فیل، سفارش‌های جامانده را خودکار جبران می‌کند.
             print(f"[poller] خطای سیکل: {e!r}")
-        if cycle % 10 == 0:  # هر ~۱۰ دقیقه: نرخِ درخواستِ ووکامرس (برای رصدِ فشار روی سایت)
-            _r = woo.req_count()
-            _p = int(db.get_meta("wc_req_mark") or _r)
-            print(f"[wc] ~{_r - _p} درخواستِ ووکامرس در ~۱۰ دقیقه ({(_r - _p) / 10:.1f}/دقیقه)")
-            db.set_meta("wc_req_mark", _r)
         cycle += 1
         await asyncio.sleep(config.POLL_INTERVAL_SECONDS)
