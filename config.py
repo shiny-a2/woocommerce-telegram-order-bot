@@ -171,15 +171,20 @@ WT_CITIZEN_APPLY = _bool("WT_CITIZEN_APPLY", False)        # False=فقط گزا
 WT_CITIZEN_OPERATOR_ID = _int("WT_CITIZEN_OPERATOR_ID", 0)  # اپراتور — مقصدِ گزارش
 WT_CITIZEN_MAX_OOS = _int("WT_CITIZEN_MAX_OOS", 200)       # (منسوخ) دیگر استفاده نمی‌شود؛ قانونِ مالک: بدونِ سقفِ تعدادی
 
-# سینکِ jeweltime → جواهریان (آینهٔ موجود/ناموجود + تعدادِ عددیِ برندهای مبدأ؛ قیمت فقط گزارش)
+# سینکِ jeweltime → جواهریان (آینهٔ موجود/ناموجود + تعداد و قیمتِ تغییرکردهٔ برندهای مبدأ)
 WT_JEWEL_ENABLED = _bool("WT_JEWEL_ENABLED", False)        # کلیدِ اصلیِ جابِ روزانهٔ jeweltime (fail-closed)
-WT_JEWEL_APPLY = _bool("WT_JEWEL_APPLY", False)            # False=فقط گزارش، True=نوشتنِ موجودی/تعداد (قیمت هرگز)
+WT_JEWEL_APPLY = _bool("WT_JEWEL_APPLY", False)            # False=فقط گزارش، True=نوشتنِ موجودی/تعداد و قیمت‌های تغییرکرده
+
+# کارنامهٔ فروشِ اپراتورِ CRM (انتسابِ «تماس→خرید» ۷روزه) → گروهِ گزارش
+WT_SALES_ATTRIB_ENABLED = _bool("WT_SALES_ATTRIB_ENABLED", True)  # کارتِ روزانهٔ کارنامهٔ فروش
+WT_SALES_ATTRIB_DAYS = _int("WT_SALES_ATTRIB_DAYS", 30)           # پنجرهٔ گزارش (روز)
 
 # درجِ خودکارِ تصاویر (کتابخانهٔ رسانه → محصولاتِ بی‌عکس، بر اساسِ رفرنس)
 WT_MEDIAIMG_APPLY = _bool("WT_MEDIAIMG_APPLY", False)      # False=فقط گزارشِ dry-run، True=نوشتنِ واقعی
 WT_MEDIAIMG_SCAN_PAGES = _int("WT_MEDIAIMG_SCAN_PAGES", 25)  # چند صفحهٔ ۱۰۰تاییِ اخیر برای یافتنِ بی‌عکس‌ها
 WT_MEDIAIMG_USE_CRM = _bool("WT_MEDIAIMG_USE_CRM", True)   # اگر اندپوینتِ CRM هست، متادیتای کامل (شاملِ description)
 WT_MEDIAIMG_OPERATOR_ID = _int("WT_MEDIAIMG_OPERATOR_ID", 0)  # اپراتور — می‌تواند دکمه را بزند + مقصدِ گزارش
+WT_DIGIKALA_OPERATOR_ID = _int("WT_DIGIKALA_OPERATOR_ID", 0)  # اپراتور — دسترسی به ابزارِ فایلِ دیجی‌کالا
 
 # نگاشتِ config-drivenِ «مسئولِ سایت» و «مسئولِ اینستاگرام» (Telegram user id). ۰ = تعیین‌نشده.
 # اگر ۰ باشد، مسیرهای موجودِ meta (wp_link / ig_admin_uid) به‌عنوانِ fallback استفاده می‌شوند (backward-compatible).
