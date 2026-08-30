@@ -50,8 +50,8 @@ def send_html(chat_id, text) -> bool:
         return False
 
 
-def _report_targets() -> list:
-    """گروهِ گزارش/کار → REPORTS_CHAT_ID → پیویِ مدیران."""
+def _group_targets() -> list:
+    """گروهِ گزارشاتِ روزانه: work_group → REPORTS_CHAT_ID → (اگر هیچ‌کدام) پیویِ مدیران."""
     ids = []
     wg = db.get_meta("work_group")
     if wg:
@@ -66,23 +66,37 @@ def _report_targets() -> list:
     return ids
 
 
+def _manager_targets() -> list:
+    """پی‌ویِ مدیر(ها) — مقصدِ محرمانهٔ مبالغِ فروش."""
+    return list(c.ADMIN_USER_IDS or [])
+
+
 async def main() -> int:
     if not getattr(c, "WT_SALES_ATTRIB_ENABLED", False):
         log("WT_SALES_ATTRIB_ENABLED=off → خروج.")
         return 0
     days = getattr(c, "WT_SALES_ATTRIB_DAYS", 30)
-    targets = _report_targets()
+    group_ids = _group_targets()
+    manager_ids = _manager_targets()
     for op_id in sa.OPERATORS:
         try:
-            st = await sa.run(woo, op_id, days=days)
+            st = await sa.run_daily(woo, op_id, month_days=days)
         except Exception as e:  # noqa: BLE001
             log(f"خطا برای اپراتور {op_id}: {type(e).__name__}: {str(e)[:120]}")
             continue
-        log(f"{st['op_name']}: اساین={st['assigned']} تماس={st['contacted']} "
-            f"منتسب={len(st['attributed'])} درآمد={int(st['revenue_attributed'])} از {st['orders_total']} سفارش")
-        text = sa.report_text(st)
-        for tid in targets:
-            send_html(tid, text)
+        # لاگِ محلی می‌تواند مبلغ داشته باشد (فایلِ سرور، نه گروه)
+        log(f"{st['op_name']} | امروز: کار={st['activity']['phones_worked']} "
+            f"فعالیت={st['activity']['total_actions']} منتسب={len(st['attr_today'])} "
+            f"درآمدِ امروز={int(st['rev_today'])} | ماه: منتسب={len(st['attr_month'])} "
+            f"درآمدِ ماه={int(st['rev_month'])}")
+        # ۱) کارتِ کاملِ روزانه (بدونِ مبلغ) → گروهِ گزارشات
+        group_text = sa.report_group_daily(st)
+        for tid in group_ids:
+            send_html(tid, group_text)
+        # ۲) مبالغِ فروش (محرمانه) → فقط پی‌ویِ مدیر
+        money_text = sa.report_manager_money(st)
+        for mid in manager_ids:
+            send_html(mid, money_text)
     return 0
 
 
