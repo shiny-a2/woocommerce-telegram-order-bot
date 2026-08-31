@@ -336,8 +336,6 @@ def report_group_daily(st: dict) -> str:
         f"📈 نرخِ تبدیلِ ماه (فروش/لیدِ کارشده): {_fa(round(st['conversion_pct']))}٪",
         f"🛍️ سفارش‌های پرداختیِ امروزِ فروشگاه: {_fa(st['orders_today_total'])} "
         f"(ارگانیک/مشتریِ خودش: {_fa(len(st['organic_today']))})",
-        "",
-        "<i>🔒 مبالغِ فروش به‌صورتِ محرمانه به پی‌ویِ مدیر ارسال شد.</i>",
     ]
     return "\n".join(L)
 
