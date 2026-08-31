@@ -72,23 +72,20 @@ def _parse_dt(s):
 
 
 def fetch_operator_events(op_id: int, since_days=45) -> dict:
-    """رویدادهای «کارِ» اپراتور روی تلفن‌ها: {norm_phone: [datetime,...]}. مبدأ: leads + audit_log."""
+    """رویدادهای «کارِ» اپراتور روی تلفن‌ها: {norm_phone: [datetime(UTC),...]}.
+
+    مبدأِ واقعیِ کار: یادداشت‌ها (lead_notes) + پیگیری‌ها (lead_status_log) + آخرین‌تماسِ لیدهای اساین‌شده.
+    audit_log کارِ این اپراتورها را ثبت نمی‌کند؛ پس مستقیم از جداولِ اختصاصیِ CRM می‌خوانیم.
+    هر سه کوئری خروجیِ هم‌شکل (phone, datetime) می‌دهند تا پارسِ یکنواخت بماند.
+    """
     since = (datetime.date.today() - datetime.timedelta(days=since_days)).isoformat()
     q = f"""SET NAMES utf8mb4;
--- ۱) لیدهای اساینِ اپراتور که تماس گرفته (last_contact_at)
+SELECT phone, created_at FROM {PFX}lead_notes
+  WHERE user_id={op_id} AND created_at>='{since} 00:00:00';
+SELECT phone, created_at FROM {PFX}lead_status_log
+  WHERE user_id={op_id} AND created_at>='{since} 00:00:00';
 SELECT phone, last_contact_at FROM {PFX}leads
   WHERE assigned_to={op_id} AND last_contact_at IS NOT NULL AND last_contact_at>='{since} 00:00:00';
--- ۲) اکشن‌های کارِ اپراتور روی لید (status/note/assign/update) → تلفنِ لید
-SELECT l.phone, a.created_at
-  FROM {PFX}audit_log a JOIN {PFX}leads l ON l.id=a.entity_id
-  WHERE a.actor_id={op_id} AND a.entity_type='lead'
-    AND a.action IN ('status_change','note_added','assigned','updated') AND a.created_at>='{since} 00:00:00';
--- ۳) اکشن‌های اپراتور روی مخاطب (تلفن از JSONِ changes)
-SELECT JSON_UNQUOTE(JSON_EXTRACT(a.changes,'$.phone_primary')), a.created_at
-  FROM {PFX}audit_log a
-  WHERE a.actor_id={op_id} AND a.entity_type='contact'
-    AND a.action IN ('updated','tg_update') AND a.created_at>='{since} 00:00:00'
-    AND JSON_EXTRACT(a.changes,'$.phone_primary') IS NOT NULL;
 """
     ev = {}
     for row in _sql(q):
@@ -216,55 +213,44 @@ def report_text(st: dict) -> str:
 
 
 # ─────────────────────────  گزارشِ روزانهٔ «پایانِ شیفت»  ─────────────────────────
-# گروهِ گزارشات: فعالیت + تعدادِ فروشِ منتسب (بدونِ مبلغ). مبالغ → فقط پی‌ویِ مدیر.
-
-_ACTION_FA = {
-    "note_added": "ثبتِ یادداشت/تماس",
-    "status_change": "تغییرِ وضعیت",
-    "assigned": "اساینِ لیدِ جدید",
-    "updated": "ویرایشِ اطلاعات",
-    "tg_update": "به‌روزرسانی از تلگرام",
-    "created": "ایجادِ لید",
-    "deleted": "حذفِ لید",
-}
+# گروهِ گزارشات: فقط کارِ اپراتور (یادداشت + پیگیری + لیدهای کارشده) — بدونِ فروش/مبلغ.
+# فروش (انتساب، نرخِ تبدیل، مبالغ) → فقط پی‌ویِ مدیر.
 
 
 def fetch_daily_activity(op_id: int, start_utc, end_utc) -> dict:
-    """فعالیتِ اپراتور در بازهٔ [start_utc, end_utc) (UTC): شمارشِ اکشن‌ها + تلفن‌های کارشده + اساینِ جدید."""
+    """کارِ امروزِ اپراتور در [start_utc, end_utc) (UTC): تعدادِ یادداشت + پیگیری + لیدهای متمایزِ کارشده."""
     s = start_utc.strftime("%Y-%m-%d %H:%M:%S")
     e = end_utc.strftime("%Y-%m-%d %H:%M:%S")
     q = f"""SET NAMES utf8mb4;
-SELECT 'act' t, a.action k, COUNT(*) n FROM {PFX}audit_log a
-  WHERE a.actor_id={op_id} AND a.created_at>='{s}' AND a.created_at<'{e}' GROUP BY a.action
+SELECT 'notes' t, COUNT(*) n FROM {PFX}lead_notes
+  WHERE user_id={op_id} AND created_at>='{s}' AND created_at<'{e}'
 UNION ALL
-SELECT 'phones','', COUNT(DISTINCT l.phone) FROM {PFX}audit_log a JOIN {PFX}leads l ON l.id=a.entity_id
-  WHERE a.actor_id={op_id} AND a.entity_type='lead' AND a.created_at>='{s}' AND a.created_at<'{e}'
+SELECT 'followups', COUNT(*) FROM {PFX}lead_status_log
+  WHERE user_id={op_id} AND created_at>='{s}' AND created_at<'{e}'
 UNION ALL
-SELECT 'newassign','', COUNT(*) FROM {PFX}audit_log a
-  WHERE a.actor_id={op_id} AND a.entity_type='lead' AND a.action='assigned'
-    AND a.created_at>='{s}' AND a.created_at<'{e}'
-UNION ALL
-SELECT 'total','', COUNT(*) FROM {PFX}audit_log a
-  WHERE a.actor_id={op_id} AND a.created_at>='{s}' AND a.created_at<'{e}';
+SELECT 'phones', COUNT(DISTINCT phone) FROM (
+    SELECT phone FROM {PFX}lead_notes WHERE user_id={op_id} AND created_at>='{s}' AND created_at<'{e}'
+    UNION
+    SELECT phone FROM {PFX}lead_status_log WHERE user_id={op_id} AND created_at>='{s}' AND created_at<'{e}'
+  ) x;
 """
-    acts, phones, newassign, total = {}, 0, 0, 0
+    notes, followups, phones = 0, 0, 0
     for row in _sql(q):
-        if len(row) < 3:
+        if len(row) < 2:
             continue
-        tag, key, num = row[0], row[1], row[2]
+        tag, num = row[0], row[1]
         try:
             num = int(num)
         except ValueError:
             continue
-        if tag == "act":
-            acts[key] = num
+        if tag == "notes":
+            notes = num
+        elif tag == "followups":
+            followups = num
         elif tag == "phones":
             phones = num
-        elif tag == "newassign":
-            newassign = num
-        elif tag == "total":
-            total = num
-    return {"actions": acts, "phones_worked": phones, "new_assigned": newassign, "total_actions": total}
+    return {"notes": notes, "followups": followups, "phones_worked": phones,
+            "total_actions": notes + followups}
 
 
 async def run_daily(woo_mod, op_id: int, month_days=30) -> dict:
@@ -310,48 +296,40 @@ def _unit() -> str:
 
 
 def report_group_daily(st: dict) -> str:
-    """کارتِ گروهِ گزارشات: کاملِ فعالیت + تعدادِ فروشِ منتسب — بدونِ هیچ مبلغی."""
-    acts = st["activity"]["actions"]
+    """کارتِ گروهِ گزارشات: فقط کارِ امروزِ اپراتور (یادداشت/پیگیری) — بدونِ هیچ آمارِ فروش/مبلغ."""
+    a = st["activity"]
     L = [
         f"📅 <b>گزارشِ پایانِ شیفت — {st['op_name']}</b>",
         f"🗓 {_jlabel(st['jday_g'])}",
         "",
-        "☎️ <b>کارِ امروز:</b>",
-        f"• لیدهایی که رویشان کار کرد: {_fa(st['activity']['phones_worked'])}",
-        f"• کلِ فعالیت‌های امروز: {_fa(st['activity']['total_actions'])}",
-    ]
-    for key in ("note_added", "status_change", "assigned", "updated", "tg_update", "created", "deleted"):
-        n = acts.get(key, 0)
-        if n:
-            L.append(f"   — {_ACTION_FA.get(key, key)}: {_fa(n)}")
-    for k, n in acts.items():  # اکشن‌های ناشناخته را هم صادقانه نشان بده
-        if k not in _ACTION_FA and n:
-            L.append(f"   — {k}: {_fa(n)}")
-    L += [
+        "🧾 <b>کارِ امروز:</b>",
+        f"📝 یادداشت‌های ثبت‌شده: {_fa(a['notes'])}",
+        f"🔁 پیگیری‌های ثبت‌شده: {_fa(a['followups'])}",
+        f"☎️ لیدهایی که رویشان کار کرد: {_fa(a['phones_worked'])}",
         f"👥 کلِ لیدهای اساین‌شده به او: {_fa(st['assigned_total'])}",
-        "",
-        "✅ <b>فروشِ منتسب (کارِ او):</b>",
-        f"• امروز: {_fa(len(st['attr_today']))} سفارش",
-        f"• این ماه: {_fa(len(st['attr_month']))} سفارش",
-        f"📈 نرخِ تبدیلِ ماه (فروش/لیدِ کارشده): {_fa(round(st['conversion_pct']))}٪",
-        f"🛍️ سفارش‌های پرداختیِ امروزِ فروشگاه: {_fa(st['orders_today_total'])} "
-        f"(ارگانیک/مشتریِ خودش: {_fa(len(st['organic_today']))})",
     ]
     return "\n".join(L)
 
 
 def report_manager_money(st: dict) -> str:
-    """کارتِ محرمانهٔ پی‌ویِ مدیر: فقط مبالغِ فروشِ منتسب (امروز + ماه) و ریزِ امروز."""
+    """کارتِ محرمانهٔ پی‌ویِ مدیر: کاملِ فروش (انتساب، نرخِ تبدیل، مبالغ) + خلاصهٔ کارِ اپراتور."""
     import reports
     u = _unit()
+    act = st["activity"]
     L = [
-        f"🔒 <b>مبالغِ فروشِ {st['op_name']}</b> — محرمانه (فقط مدیر)",
+        f"🔒 <b>گزارشِ فروشِ {st['op_name']}</b> — محرمانه (فقط مدیر)",
         f"🗓 {_jlabel(st['jday_g'])}",
         "",
-        f"💰 امروز: {_fa(len(st['attr_today']))} سفارش · "
+        f"💰 فروشِ منتسب — امروز: {_fa(len(st['attr_today']))} سفارش · "
         f"<b>{reports.fmt_money(st['rev_today'])}</b> {u}",
-        f"💰 این ماه: {_fa(len(st['attr_month']))} سفارش · "
+        f"💰 فروشِ منتسب — این ماه: {_fa(len(st['attr_month']))} سفارش · "
         f"<b>{reports.fmt_money(st['rev_month'])}</b> {u}",
+        f"📈 نرخِ تبدیلِ ماه (فروش/لیدِ کارشده): {_fa(round(st['conversion_pct']))}٪",
+        f"🛍️ سفارش‌های پرداختیِ امروزِ فروشگاه: {_fa(st['orders_today_total'])} "
+        f"(ارگانیک/مشتریِ خودش: {_fa(len(st['organic_today']))})",
+        "",
+        f"🧾 کارِ امروز — یادداشت: {_fa(act['notes'])} · پیگیری: {_fa(act['followups'])} · "
+        f"لیدهای کارشده: {_fa(act['phones_worked'])}",
     ]
     if st["attr_today"]:
         L.append("")
