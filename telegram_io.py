@@ -83,7 +83,7 @@ def _product_line(order) -> str:
     return "🛍️ محصول:\n" + "\n".join("• " + p for p in parts)
 
 
-def build_caption(order, stock_location=None, summary=None, items_regular=None) -> str:
+def build_caption(order, stock_location=None, summary=None) -> str:
     f = woo.caption_fields(order)
     summary = summary or {}
     location = summary.get("location") or stock_location  # موقعیت دقیقِ پلاگین مقدم است
@@ -112,8 +112,8 @@ def build_caption(order, stock_location=None, summary=None, items_regular=None) 
     lines.append(_product_line(order))
     if location:
         lines.append(f"📦 موقعیت موجودی: {_esc(location)}")
-    # تفکیکِ مالی: «قیمتِ قبل تخفیف» = قیمتِ اصلیِ محصول (حراج) اگر داده شد، وگرنه جمعِ آیتم‌ها؛
-    # تخفیف = حراجِ محصول + کوپن روی هم، سپس حمل و پرداختی.
+    # تفکیکِ مالی — همه از دادهٔ قفل‌شدهٔ خودِ سفارش (قیمتِ لحظهٔ خرید)، نه قیمتِ زندهٔ محصول؛
+    # تا تغییرِ بعدیِ قیمت، مبلغِ فاکتورهای قدیمی را عوض نکند. تخفیف = فقط کوپنِ ثبت‌شدهٔ سفارش.
     try:
         ship = float(f.get("shipping_total") or 0)
         items_sub = float(f.get("items_subtotal") or 0)
@@ -122,11 +122,8 @@ def build_caption(order, stock_location=None, summary=None, items_regular=None) 
     except (TypeError, ValueError):
         ship, items_sub, disc, total_amt = 0.0, 0.0, 0.0, 0.0
     cl_ = config.CURRENCY_LABEL
-    pre = float(items_regular or 0)          # مجموعِ قیمتِ اصلی (قبل از حراج)
-    if pre < items_sub:                      # اگر داده نشد یا کمتر بود → همان جمعِ آیتم‌ها
-        pre = items_sub
-    # تخفیفِ کل = (قیمتِ اصلی) − (پرداختیِ کالاها پس از کوپن). مستقل از مالیات/حمل تا تخفیفِ کاذب نسازد.
-    total_disc = pre - (items_sub - disc)    # حراجِ محصول (pre−items_sub) + کوپن (disc)
+    pre = items_sub                          # «قیمت قبل تخفیف» = جمعِ قفل‌شدهٔ آیتم‌های سفارش (قیمتِ لحظهٔ خرید)
+    total_disc = disc                        # فقط تخفیفِ ثبت‌شدهٔ سفارش (کوپن)؛ حراجِ محصول در سفارش ثبت نمی‌شود
     # مبلغِ خالصِ کالاها = کل − حمل (همیشه با هزینهٔ حمل جمع می‌شود و مبلغِ کل را می‌دهد)
     products_amt = total_amt - ship
     if total_disc > 0.5:
@@ -213,7 +210,7 @@ def _main_menu():
         [InlineKeyboardButton("📦 به‌روزرسانی فایل دیجی‌کالا", callback_data="digikala:start")],
         [InlineKeyboardButton("💲 قیمت مرجع درخواستی دیجی‌کالا", callback_data="digiref:start")],
         [InlineKeyboardButton("📄 خروجی اکسل (این ماه)", callback_data="csv:month")],
-        [InlineKeyboardButton("💰 حساب مالی", callback_data="finance:cur")],
+        [InlineKeyboardButton("💰 حساب یاقوتی", callback_data="yaghouti:cur")],
         [InlineKeyboardButton("🔍 جستجوی سفارش", callback_data="search")],
     ])
 
@@ -387,7 +384,7 @@ async def _handle_digikala_reference_price_document(update: Update, context: Con
     return True
 
 
-# ---------- تأمین‌کنندهٔ سیتیزن (app.supplier.example) — لاگینِ OTP از طریقِ دکمه (ادمین‌ها + اپراتور) ----------
+# ---------- تأمین‌کنندهٔ سیتیزن (app.saati.watch) — لاگینِ OTP از طریقِ دکمه (ادمین‌ها + اپراتور) ----------
 def _citizen_can(uid) -> bool:
     return uid in config.ADMIN_USER_IDS or uid == getattr(config, "WT_PRICESYNC_OPERATOR_ID", 0)
 
@@ -1689,7 +1686,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text(
                 "💎 <b>سیتیزن</b>\nورود/تمدیدِ توکنِ تأمین‌کننده و نمونهٔ محصولات (سینکِ روزانه خودکار است).",
                 reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
-        elif data.startswith("finance:"):   # «حساب مالی» — خلاصهٔ مالیِ ماهانه (فقط‌ادمین، فقط پیوی)
+        elif data.startswith("yaghouti:"):   # «حساب یاقوتی» — خلاصهٔ مالیِ ماهانه (فقط‌ادمین، فقط پیوی)
             arg = data.split(":", 1)[1]
             month = wt_finance.cur_month() if arg == "cur" else arg
             fin = await wt_finance.load_month(month)   # حقوقِ ثابت + مانده از قبل اعمال می‌شود

@@ -54,13 +54,13 @@ def test_caption_discount():
     r &= check("تخفیف‌دار: «قیمت قبل تخفیف» هست", "قیمت قبل تخفیف" in cap)
     r &= check("تخفیف‌دار: کوپن OFF15 هست", "OFF15" in cap)
     r &= check("تخفیف‌دار: «هزینه ارسال» هست", "هزینه ارسال" in cap)
-    r &= check("تخفیف‌دار: «مبلغ پرداختی» هست", "مبلغ پرداختی" in cap)
+    r &= check("تخفیف‌دار: «مبلغ کل پرداختی» هست", "مبلغ کل پرداختی" in cap)
     order2 = dict(order)
     order2["discount_total"] = "0"
     order2["coupon_lines"] = []
     cap2 = telegram_io.build_caption(order2)
     r &= check("بدونِ تخفیف: خطِ «قیمت قبل تخفیف» نیست", "قیمت قبل تخفیف" not in cap2)
-    r &= check("بدونِ تخفیف: «مبلغ پرداختی» هست", "مبلغ پرداختی" in cap2)
+    r &= check("بدونِ تخفیف: «مبلغ کل پرداختی» هست", "مبلغ کل پرداختی" in cap2)
     return r
 
 
