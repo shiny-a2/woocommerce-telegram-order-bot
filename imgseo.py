@@ -113,27 +113,35 @@ def product_meta(product_name: str, ref: str = "", brand: str = "") -> dict:
 
 
 # --------------------------------------------------------------- writers ----
-def _run(mode: str, lines: list[str], apply: bool) -> dict:
+def _run(mode: str, lines: list[str], apply: bool, flag: str = "") -> dict:
     if not lines:
-        return {"ok": 0, "err": 0, "rows": []}
+        return {"ok": 0, "err": 0, "skip": 0, "rows": []}
     if not apply:
-        return {"ok": 0, "err": 0, "rows": [], "dry_run": True,
+        return {"ok": 0, "err": 0, "skip": 0, "rows": [], "dry_run": True,
                 "would_write": len(lines), "sample": lines[:3]}
-    cmd = f'su -s /bin/bash {imgpipe.SITE_USER} -c "{SERVER_SCRIPT} {mode}"'
+    inner = f"{SERVER_SCRIPT} {mode} {flag}".strip()
+    cmd = f'su -s /bin/bash {imgpipe.SITE_USER} -c "{inner}"'
     rc, out, err = imgpipe._ssh(cmd, "\n".join(lines) + "\n")
-    ok = bad = 0
+    ok = bad = skipped = 0
     rows = []
     for ln in out.splitlines():
         parts = ln.split("\t")
         if parts[0] == "OK" and len(parts) >= 2:
             rows.append({"id": parts[1], "status": "ok"}); ok += 1
+        elif parts[0] == "SKIP" and len(parts) >= 3:
+            rows.append({"id": parts[1], "status": parts[2]}); skipped += 1
         elif parts[0] == "ERR" and len(parts) >= 3:
             rows.append({"id": parts[1], "status": parts[2]}); bad += 1
-    return {"ok": ok, "err": bad, "rows": rows, "rc": rc, "stderr": err.strip()[-300:]}
+    return {"ok": ok, "err": bad, "skip": skipped, "rows": rows,
+            "rc": rc, "stderr": err.strip()[-300:]}
 
 
-def apply_media_seo(items: list[dict], apply: bool = False) -> dict:
-    """items: [{attachment_id, ref, index, product_name?, brand?}] → نوشتنِ alt/title/caption/description."""
+def apply_media_seo(items: list[dict], apply: bool = False, only_empty: bool = False) -> dict:
+    """items: [{attachment_id, ref, index, product_name?, brand?}] → نوشتنِ alt/title/caption/description.
+
+    only_empty=True یعنی فیلدی که از قبل مقدار دارد دست نخورَد (برای رسانهٔ قدیمی که شاید
+    متادیتای دستی دارد؛ برای آپلودهای تازهٔ خودمان لازم نیست).
+    """
     lines = []
     for it in items:
         aid = it.get("attachment_id")
@@ -142,11 +150,15 @@ def apply_media_seo(items: list[dict], apply: bool = False) -> dict:
         m = media_meta(it.get("ref", ""), int(it.get("index", 0)),
                        it.get("product_name", ""), it.get("brand", ""))
         lines.append("\t".join([str(aid), m["alt"], m["title"], m["caption"], m["description"]]))
-    return _run("media", lines, apply)
+    return _run("media", lines, apply, "--only-empty" if only_empty else "")
 
 
-def apply_product_seo(items: list[dict], apply: bool = False) -> dict:
-    """items: [{product_id, name, ref?, brand?}] → نوشتنِ متای Rank Math."""
+def apply_product_seo(items: list[dict], apply: bool = False, force: bool = False) -> dict:
+    """items: [{product_id, name, ref?, brand?}] → نوشتنِ متای Rank Math.
+
+    ⚠️ پیش‌فرض بازنویسی نمی‌کند. بیشترِ محصولاتِ سایت از قبل عنوان/توضیحِ سئوی دستی دارند؛
+    force=True فقط وقتی که مالک صریحاً بخواهد همه‌شان با قالبِ ما جایگزین شوند.
+    """
     lines = []
     for it in items:
         pid = it.get("product_id") or it.get("id")
@@ -154,7 +166,7 @@ def apply_product_seo(items: list[dict], apply: bool = False) -> dict:
             continue
         m = product_meta(it.get("name", ""), it.get("ref", ""), it.get("brand", ""))
         lines.append("\t".join([str(pid), m["title"], m["description"], m["focus"]]))
-    return _run("product", lines, apply)
+    return _run("product", lines, apply, "--force" if force else "")
 
 
 # ------------------------------------------------------------ convenience ----

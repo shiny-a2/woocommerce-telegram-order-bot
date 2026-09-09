@@ -90,9 +90,11 @@ def cmd_full(args) -> int:
 
     pitems = [{"product_id": r["id"], "name": r.get("name", ""), "ref": r["ref"],
                "brand": args.brand_name} for r in attached]
-    pres = imgseo.apply_product_seo(pitems, apply=args.apply)
-    print(f"۵) سئوی محصول: ok={pres.get('ok', 0)} err={pres.get('err', 0)}"
+    pres = imgseo.apply_product_seo(pitems, apply=args.apply, force=args.force_seo)
+    print(f"۵) سئوی محصول: ok={pres.get('ok', 0)} دست‌نخورده={pres.get('skip', 0)} err={pres.get('err', 0)}"
           + (f" (dry-run، {pres.get('would_write', 0)} خط)" if pres.get("dry_run") else ""))
+    if not args.force_seo:
+        print("   (محصولاتی که از قبل سئوی دستی دارند دست نخوردند؛ برای جایگزینی --force-seo)")
 
     if not args.apply:
         print("\n⚠️ dry-run بود؛ هیچ چیزی روی سایت نوشته نشد. برای اجرای واقعی --apply بده.")
@@ -119,6 +121,8 @@ def main() -> int:
     pf.add_argument("--brand-name", default="", help="نامِ فارسیِ برند برای متنِ سئو")
     pf.add_argument("--limit", type=int, default=0)
     pf.add_argument("--apply", action="store_true")
+    pf.add_argument("--force-seo", action="store_true",
+                    help="سئوی دستیِ موجودِ محصولات را هم بازنویسی کن (پیش‌فرض: دست نمی‌خورد)")
 
     args = ap.parse_args()
     return {"batches": cmd_batches, "import": cmd_import,
