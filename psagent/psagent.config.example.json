@@ -1,0 +1,19 @@
+{
+  "root": "C:\\psagent",
+  "hero_template": "C:\\psagent\\templates\\hero.psd",
+  "gallery_template": "C:\\psagent\\templates\\gallery.psd",
+
+  "batch_size": 40,
+  "restart_photoshop_every": 10,
+  "keep_photoshop_open": false,
+
+  "manifest_url": "",
+
+  "auto_push": false,
+  "drop_host": "",
+  "drop_user": "imgdrop",
+  "drop_port": 22,
+  "drop_key": "C:\\psagent\\.ssh\\imgdrop_ed25519",
+
+  "poll_seconds": 120
+}

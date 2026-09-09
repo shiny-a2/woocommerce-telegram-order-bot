@@ -1,5 +1,5 @@
 <?php
-// درجِ سریعِ محلیِ موجودی برای جواهریان (روی خودِ سرورِ cPanel اجرا می‌شود).
+// درجِ سریعِ محلیِ موجودی برای فروشگاه (روی خودِ سرورِ cPanel اجرا می‌شود).
 // مستقر در: /home/user/jewel_apply_stock.php  (مالک: shop)
 // اجرا:  su -s /bin/bash shop -c "/opt/cpanel/ea-php85/root/usr/bin/php /home/user/jewel_apply_stock.php"
 // ورودی از stdin: خطوطِ "id<TAB>qty". manage_stock=true + stock_quantity را با ووکامرسِ محلی ست می‌کند

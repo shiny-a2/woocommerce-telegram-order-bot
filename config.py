@@ -171,7 +171,7 @@ WT_CITIZEN_APPLY = _bool("WT_CITIZEN_APPLY", False)        # False=فقط گزا
 WT_CITIZEN_OPERATOR_ID = _int("WT_CITIZEN_OPERATOR_ID", 0)  # اپراتور — مقصدِ گزارش
 WT_CITIZEN_MAX_OOS = _int("WT_CITIZEN_MAX_OOS", 200)       # (منسوخ) دیگر استفاده نمی‌شود؛ قانونِ مالک: بدونِ سقفِ تعدادی
 
-# سینکِ jeweltime → جواهریان (آینهٔ موجود/ناموجود + تعداد و قیمتِ تغییرکردهٔ برندهای مبدأ)
+# سینکِ jeweltime → فروشگاه (آینهٔ موجود/ناموجود + تعداد و قیمتِ تغییرکردهٔ برندهای مبدأ)
 WT_JEWEL_ENABLED = _bool("WT_JEWEL_ENABLED", False)        # کلیدِ اصلیِ جابِ روزانهٔ jeweltime (fail-closed)
 WT_JEWEL_APPLY = _bool("WT_JEWEL_APPLY", False)            # False=فقط گزارش، True=نوشتنِ موجودی/تعداد و قیمت‌های تغییرکرده
 

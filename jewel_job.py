@@ -1,4 +1,4 @@
-"""jewel_job.py — جابِ روزانهٔ سینکِ jeweltime → جواهریان + گزارشِ اکسل به مالک/اپراتور.
+"""jewel_job.py — جابِ روزانهٔ سینکِ jeweltime → فروشگاه + گزارشِ اکسل به مالک/اپراتور.
 
 مستقل و ضدِ ریبوت: Scheduled Task «WooJewelSync» (روزانه + at-boot). خواندنِ مبدأ read-only با SSH.
 گاردِ fail-closed: اگر فهرستِ jeweltime خالی برگردد (SSH/شبکه/خطای خواندن) → دست نگه‌دار، هشدار،
@@ -96,7 +96,7 @@ async def main() -> int:
     except Exception as e:  # noqa: BLE001
         alert_owner(f"⛔ سینکِ jeweltime خطا داد: {type(e).__name__}. سایت دست‌نخورده.")
         return 1
-    log(f"پلن: {res['summary']} | jeweltime={res['jt_count']} جواهریان={res['jav_count']}")
+    log(f"پلن: {res['summary']} | jeweltime={res['jt_count']} فروشگاه={res['jav_count']}")
 
     # گاردِ خواندنِ ناقص: اگر فهرستِ مبدأ خالی بود → دست نگه‌دار (SSH/شبکه/خطا).
     if res["jt_count"] == 0:
@@ -106,7 +106,7 @@ async def main() -> int:
         return 2
 
     if not getattr(c, "WT_JEWEL_APPLY", False):
-        cap = f"📊 پیش‌نمایشِ روزانهٔ jeweltime → جواهریان (بدونِ نوشتن)\n{res['summary']}"
+        cap = f"📊 پیش‌نمایشِ روزانهٔ jeweltime → فروشگاه (بدونِ نوشتن)\n{res['summary']}"
         for oid in _recipients():
             send_doc(oid, res["xlsx"], cap)
         log("APPLY=off → فقط گزارش.")
@@ -116,7 +116,7 @@ async def main() -> int:
     r = res2["result"]
     errs = len(r["errors"])
     log(f"اعمال شد: stock={r['stock']} errors={errs}")
-    cap = (f"✅ سینکِ روزانهٔ jeweltime → جواهریان انجام شد\n\n"
+    cap = (f"✅ سینکِ روزانهٔ jeweltime → فروشگاه انجام شد\n\n"
            f"• موجودی/تعدادِ نوشته‌شده: {r['stock']}\n"
            f"• اختلافِ قیمت (فقط گزارش): {len(res2['plan']['price_diff'])}\n"
            f"• خطا: {errs}\n\nگزارشِ کامل در اکسل (شیتِ «اختلاف-قیمت» را ببین).")

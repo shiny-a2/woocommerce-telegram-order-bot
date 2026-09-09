@@ -1,5 +1,5 @@
 @echo off
-REM جابِ روزانهٔ سینکِ jeweltime → جواهریان (موجود/ناموجود + تعداد؛ قیمت فقط گزارش).
+REM جابِ روزانهٔ سینکِ jeweltime → فروشگاه (موجود/ناموجود + تعداد؛ قیمت فقط گزارش).
 REM توسطِ Scheduled Task «WooJewelSync» اجرا می‌شود. خاموش‌کردن: تسک را Disable کن.
 REM فقط‌گزارش (بدونِ نوشتن): WT_JEWEL_APPLY=0
 cd /d C:\A2\woo-orderbot

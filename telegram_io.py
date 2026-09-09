@@ -210,7 +210,7 @@ def _main_menu():
         [InlineKeyboardButton("📦 به‌روزرسانی فایل دیجی‌کالا", callback_data="digikala:start")],
         [InlineKeyboardButton("💲 قیمت مرجع درخواستی دیجی‌کالا", callback_data="digiref:start")],
         [InlineKeyboardButton("📄 خروجی اکسل (این ماه)", callback_data="csv:month")],
-        [InlineKeyboardButton("💰 حساب یاقوتی", callback_data="yaghouti:cur")],
+        [InlineKeyboardButton("💰 حساب مالی", callback_data="finance:cur")],
         [InlineKeyboardButton("🔍 جستجوی سفارش", callback_data="search")],
     ])
 
@@ -1686,7 +1686,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text(
                 "💎 <b>سیتیزن</b>\nورود/تمدیدِ توکنِ تأمین‌کننده و نمونهٔ محصولات (سینکِ روزانه خودکار است).",
                 reply_markup=InlineKeyboardMarkup(rows), parse_mode=ParseMode.HTML)
-        elif data.startswith("yaghouti:"):   # «حساب یاقوتی» — خلاصهٔ مالیِ ماهانه (فقط‌ادمین، فقط پیوی)
+        elif data.startswith("finance:"):   # «حساب مالی» — خلاصهٔ مالیِ ماهانه (فقط‌ادمین، فقط پیوی)
             arg = data.split(":", 1)[1]
             month = wt_finance.cur_month() if arg == "cur" else arg
             fin = await wt_finance.load_month(month)   # حقوقِ ثابت + مانده از قبل اعمال می‌شود

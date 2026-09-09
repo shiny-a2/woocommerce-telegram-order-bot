@@ -1,12 +1,12 @@
-"""سینکِ jeweltime → جواهریان: آینهٔ «موجود/ناموجود + تعدادِ عددی» برای برندهای مبدأ.
+"""سینکِ jeweltime → فروشگاه: آینهٔ «موجود/ناموجود + تعدادِ عددی» برای برندهای مبدأ.
 
 - مبدأ: ووکامرسِ jeweltime روی همان سرورِ cPanel (DB `source_products_db`،
   پیشوند `wp_`). خواندن فقط با SSH→mysql (read-only، SELECT).
-- مقصد: جواهریان با WooCommerce API (همان مسیرِ امنِ query-string که citizen/pricesync دارند).
-- تطبیق: `pa_رفرانس` (نرمال‌شده؛ jeweltime خط‌تیره، جواهریان گاهی نقطه).
+- مقصد: فروشگاه با WooCommerce API (همان مسیرِ امنِ query-string که citizen/pricesync دارند).
+- تطبیق: `pa_رفرانس` (نرمال‌شده؛ jeweltime خط‌تیره، فروشگاه گاهی نقطه).
 - قواعدِ مالک (۲۰۲۶-۰۸-۲۴):
     • موجود/ناموجود + تعدادِ عددی → آینهٔ خودکار (manage_stock=true + stock_quantity).
-    • قیمت: فقط گزارش. اقلامِ موجود که قیمتِ jeweltime÷۱۰۰ ≠ قیمتِ جواهریان → در اکسل گزارش
+    • قیمت: فقط گزارش. اقلامِ موجود که قیمتِ jeweltime÷۱۰۰ ≠ قیمتِ فروشگاه → در اکسل گزارش
       می‌شوند، بدونِ نوشتنِ خودکار. قیمتِ اقلامِ ناموجود دست نمی‌خورد.
     • استثنا: هانوا «16-6018-13-007» هرگز دست نخورد.
 """
@@ -25,13 +25,13 @@ SSH_KEY = os.path.join(_HERE, ".ssh", "jeweltime_ed25519")
 JT_DB = "source_products_db"
 JT_PREFIX = "wp_"
 # اعمالِ سریعِ محلی روی سرور (بدونِ شبکه/حذفِ بدنه/سربارِ per-request): اسکریپتِ PHP روی خودِ سرور،
-# جواهریان را با ووکامرس محلی به‌روز می‌کند (بوت‌استرپِ یک‌باره). به‌جای ۱۹۰۰ نوشتنِ HTTPِ ~۲.۴ثانیه‌ای.
+# فروشگاه را با ووکامرس محلی به‌روز می‌کند (بوت‌استرپِ یک‌باره). به‌جای ۱۹۰۰ نوشتنِ HTTPِ ~۲.۴ثانیه‌ای.
 PHP_BIN = "/opt/cpanel/ea-php85/root/usr/bin/php"
 SERVER_APPLY = "/home/user/jewel_apply_stock.php"
 SERVER_USER = "shop"
 PRICE_DIVISOR = 100                 # دیتابیسِ jeweltime قیمت را ریال×۱۰۰ ذخیره می‌کند
-REF_ATTR = "رفرانس"                 # نامِ اتریبیوتِ رفرنس در attributesِ محصولِ جواهریان
-BRAND_TERMS = {                     # برندهای jeweltime روی جواهریان (attr pa_نام-برند id=103)
+REF_ATTR = "رفرانس"                 # نامِ اتریبیوتِ رفرنس در attributesِ محصولِ فروشگاه
+BRAND_TERMS = {                     # برندهای jeweltime روی فروشگاه (attr pa_نام-برند id=103)
     "تروساردی": 21619, "تورنادو": 21405, "ژاک فیلیپ": 20947, "سکتور": 22034,
     "فیلیپو لورتی": 22507, "کوریو": 25732, "لوسین روشا": 21277, "هانوا": 21800, "ولدر": 21913,
 }
@@ -83,9 +83,9 @@ def fetch_jeweltime() -> dict:
     return out
 
 
-# ---------- خواندنِ مقصد (جواهریان) با WooCommerce API ----------
+# ---------- خواندنِ مقصد (فروشگاه) با WooCommerce API ----------
 async def fetch_shop(woo_mod) -> dict:
-    """محصولاتِ ۹ برندِ مبدأ روی جواهریان → {norm_ref: {id, ref, name, price, qty, status, manage}}."""
+    """محصولاتِ ۹ برندِ مبدأ روی فروشگاه → {norm_ref: {id, ref, name, price, qty, status, manage}}."""
     fields = "id,name,regular_price,stock_status,stock_quantity,manage_stock,attributes"
     out = {}
     for term_id in BRAND_TERMS.values():
@@ -175,8 +175,8 @@ def plan_changes(jt: dict, jav: dict) -> dict:
 def summarize(plan: dict) -> str:
     return (f"تغییرِ موجودی/تعداد: {len(plan['stock'])} · اختلافِ قیمت(گزارش): {len(plan['price_diff'])} · "
             f"بی‌تغییر: {plan['unchanged']} · مستثنیٰ: {len(plan['excluded'])} · "
-            f"jeweltime‌که‌در‌جواهریان‌نیست: {len(plan['jt_not_jav'])} · "
-            f"جواهریان‌که‌در‌jeweltime‌نیست: {len(plan['jav_not_jt'])}")
+            f"jeweltime‌که‌در‌فروشگاه‌نیست: {len(plan['jt_not_jav'])} · "
+            f"فروشگاه‌که‌در‌jeweltime‌نیست: {len(plan['jav_not_jt'])}")
 
 
 # ---------- اعمال (فقط موجودی/تعداد؛ قیمت هرگز نوشته نمی‌شود) ----------
@@ -252,14 +252,14 @@ def build_report(plan: dict, out_path: str, applied=False, apply_result=None) ->
     ws = wb.active
     ws.title = "خلاصه"
     ws.sheet_view.rightToLeft = True
-    ws.cell(row=1, column=1, value=f"سینکِ jeweltime → جواهریان — {'اعمال‌شده' if applied else 'پیش‌نمایش'}").font = Font(bold=True, size=13)
+    ws.cell(row=1, column=1, value=f"سینکِ jeweltime → فروشگاه — {'اعمال‌شده' if applied else 'پیش‌نمایش'}").font = Font(bold=True, size=13)
     ws.cell(row=2, column=1, value="آینهٔ موجود/ناموجود + تعداد. قیمت فقط گزارش می‌شود (jeweltime÷۱۰۰).")
     rows = [("تغییرِ موجودی/تعداد (اعمال)", len(plan["stock"])),
             ("اختلافِ قیمت (فقط گزارش)", len(plan["price_diff"])),
             ("بی‌تغییر", plan["unchanged"]),
             ("مستثنیٰ (هانوا)", len(plan["excluded"])),
-            ("در jeweltime هست، جواهریان نیست", len(plan["jt_not_jav"])),
-            ("جواهریانِ این برندها که در jeweltime نیست", len(plan["jav_not_jt"]))]
+            ("در jeweltime هست، فروشگاه نیست", len(plan["jt_not_jav"])),
+            ("فروشگاهِ این برندها که در jeweltime نیست", len(plan["jav_not_jt"]))]
     if applied:
         rows.append(("خطا در نوشتن", len(err_ids)))
     for i, (k, v) in enumerate(rows, start=4):
@@ -287,7 +287,7 @@ def build_report(plan: dict, out_path: str, applied=False, apply_result=None) ->
     # اختلافِ قیمت (فقط گزارش)
     wp = wb.create_sheet("اختلاف-قیمت")
     wp.sheet_view.rightToLeft = True
-    _hdr(wp, ["ردیف", "رفرنس", "نام", "شناسه", "قیمتِ جواهریان", "قیمتِ jeweltime÷۱۰۰", "اختلاف"])
+    _hdr(wp, ["ردیف", "رفرنس", "نام", "شناسه", "قیمتِ فروشگاه", "قیمتِ jeweltime÷۱۰۰", "اختلاف"])
     for i, c in enumerate(sorted(plan["price_diff"], key=lambda x: -abs((x["jt_price"] or 0) - (x["jav_price"] or 0))), 1):
         diff = (c["jt_price"] or 0) - (c["jav_price"] or 0)
         vals = [i, c["ref"], (c["name"] or "")[:45], c["id"], c["jav_price"], c["jt_price"], diff]
@@ -299,8 +299,8 @@ def build_report(plan: dict, out_path: str, applied=False, apply_result=None) ->
             cell.fill = _PRC
     _w(wp, [6, 16, 40, 9, 16, 18, 16])
 
-    # در jeweltime هست، جواهریان نیست
-    wj = wb.create_sheet("jeweltime‌نبود‌در‌جواهریان")
+    # در jeweltime هست، فروشگاه نیست
+    wj = wb.create_sheet("jeweltime‌نبود‌در‌فروشگاه")
     wj.sheet_view.rightToLeft = True
     _hdr(wj, ["ردیف", "رفرنس", "نام", "وضعیت", "تعداد"])
     for i, c in enumerate(plan["jt_not_jav"], 1):
@@ -308,8 +308,8 @@ def build_report(plan: dict, out_path: str, applied=False, apply_result=None) ->
             wj.cell(row=i + 1, column=j, value=v).border = _BORDER
     _w(wj, [6, 16, 40, 12, 8])
 
-    # جواهریانِ این برندها که در jeweltime نیست
-    wv = wb.create_sheet("جواهریان‌نبود‌در‌jeweltime")
+    # فروشگاهِ این برندها که در jeweltime نیست
+    wv = wb.create_sheet("فروشگاه‌نبود‌در‌jeweltime")
     wv.sheet_view.rightToLeft = True
     _hdr(wv, ["ردیف", "رفرنس", "نام", "شناسه", "وضعیتِ فعلی"])
     for i, c in enumerate(plan["jav_not_jt"], 1):

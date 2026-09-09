@@ -7,3 +7,4 @@ __pycache__/
 docs/internal-manager-audit/
 
 build_ttbol_sample.py
+psagent/psagent.config.json
