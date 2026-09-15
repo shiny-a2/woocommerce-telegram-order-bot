@@ -31,6 +31,10 @@ import requests               # noqa: E402
 
 _UA = {"User-Agent": "Mozilla/5.0"}
 _DATA = os.path.join(_HERE, "data")
+# سقفِ سطر در هر فایل. هر سطر ~۲۱ کیلوبایت (عکسِ جاسازی‌شده) و تلگرام سقفِ ۵۰ مگابایت دارد،
+# پس ۱۲۰۰ سطر ≈ ۲۵ مگابایت — با حاشیهٔ امن.
+_MAX_ROWS_PER_FILE = int(os.getenv("IT_MAX_ROWS", "1200"))
+_PROGRESS_EVERY = int(os.getenv("IT_PROGRESS_EVERY", "250"))
 
 # برندِ فارسی → (Brand IDِ کاتالوگِ منبع، ترمِ برندِ سایت). ترمِ سایت پویا هم گرفته می‌شود.
 BRANDS = {
@@ -214,12 +218,25 @@ def run(brand_name, offset=0, batch=None):
     have = site_refs_for(term)
     new = [p for p in prods if p.get("ref") and p["ref"].upper().replace(" ", "") not in have]
     total_new = len(new)
-    # پیش‌فرض: کلِ برند در یک فایل (batch=None). offset فقط برای ادامهٔ دستی.
     chunk = new[offset:] if batch is None else new[offset:offset + batch]
+
+    if not chunk:
+        for oid in _recipients():
+            _tg("sendMessage", {"chat_id": str(oid),
+                "text": f"✅ «{canon}»: هر {len(prods)} محصولِ کاتالوگِ منبع از قبل روی سایت هست — چیزی برای افزودن نیست."})
+        return 0
+
+    for oid in _recipients():
+        _tg("sendMessage", {"chat_id": str(oid),
+            "text": (f"🔎 «{canon}»: {len(prods)} محصول روی کاتالوگِ منبع، {total_new} تایش روی سایتِ ما نیست.\n"
+                     f"در حالِ گرفتنِ مشخصاتِ {len(chunk)} محصول… (هر {_PROGRESS_EVERY} تا خبر می‌دهم)")})
+
     rows_details = []
+    sent_files = 0
+    done = 0
     for p in chunk:
         try:
-            d = it.parse_detail(str(p["id"]))
+            d = it.parse_detail_cached(str(p["id"]))
             # رفرنس از صفحهٔ فهرست می‌آید و صفحهٔ جزئیات همیشه ندارد؛ اگر نبود همان را می‌گذاریم،
             # وگرنه ستونِ «رفرانس» در اکسل خالی می‌ماند (همان چیزی که مالک دید).
             if not d.get("ref") and p.get("ref"):
@@ -227,25 +244,51 @@ def run(brand_name, offset=0, batch=None):
             rows_details.append((im.map_product(d, canon), d))
         except Exception:  # noqa: BLE001
             continue
-    ts_path = os.path.join(_DATA, f"irantimer-{canon}-{offset}-{offset+len(chunk)}.xlsx")
+        done += 1
+        if done % _PROGRESS_EVERY == 0:
+            for oid in _recipients():
+                _tg("sendMessage", {"chat_id": str(oid),
+                    "text": f"⏳ «{canon}»: {done} از {len(chunk)} آماده شد…"})
+        # هر فایل سقفِ سطر دارد: ~۲۱ کیلوبایت به ازای هر سطر (عکسِ ۱۵۰×۱۵۰ داخلِ فایل)، و تلگرام
+        # بیش از ۵۰ مگابایت نمی‌پذیرد. بدونِ این سقف، برندی مثلِ سیکو ساعت‌ها پردازش می‌شد و بعد
+        # سرِ ارسال شکست می‌خورد و همهٔ کار هدر می‌رفت.
+        if len(rows_details) >= _MAX_ROWS_PER_FILE:
+            _emit(rows_details, canon, offset + done - len(rows_details), total_new, sent_files + 1)
+            sent_files += 1
+            rows_details = []
+
+    if rows_details:
+        _emit(rows_details, canon, offset + done - len(rows_details), total_new, sent_files + 1)
+        sent_files += 1
+
+    tail = (f"\n\nهمهٔ {total_new} محصولِ جدیدِ «{canon}» در {sent_files} فایل فرستاده شد."
+            if batch is None else "")
+    for oid in _recipients():
+        _tg("sendMessage", {"chat_id": str(oid),
+            "text": f"✅ «{canon}» تمام شد — {done} محصول.{tail}"})
+    return 0
+
+
+def _emit(rows_details, canon, start, total_new, part):
+    """یک بستهٔ سطرها را به اکسل تبدیل و ارسال می‌کند."""
+    end = start + len(rows_details)
+    ts_path = os.path.join(_DATA, f"irantimer-{canon}-{start}-{end}.xlsx")
     imgs = _build_excel(rows_details, canon, ts_path)
+    try:
+        size_mb = os.path.getsize(ts_path) / (1024 * 1024)
+    except OSError:
+        size_mb = 0
     with open(ts_path, "rb") as f:
         data = f.read()
-    if batch is None:
-        span, more = f"کلِ برند: {len(rows_details)} محصول", "\n\n✅ کاملِ این برند استخراج شد."
-    else:
-        nxt = offset + batch
-        span = f"این بسته: {offset+1} تا {offset+len(chunk)} ({len(rows_details)} محصول)"
-        more = f"\n\nبرای {min(batch, total_new - nxt)} محصولِ بعدی، دوباره درخواست بده (از {nxt})." if nxt < total_new else "\n\nاین آخرین بسته بود."
-    cap = (f"📥 «{canon}» — محصولاتِ جدید (که روی سایت نداریم)\n\n"
-           f"• کلِ جدید: {total_new}\n• {span}، {imgs} عکس\n\n"
-           f"قوانینت اعمال شده. با عکس تطبیق بده و اصلاحات را ریپلای کن.{more}")
-    ok = True
+    cap = (f"📥 «{canon}» — بخشِ {part}: محصولِ {start + 1} تا {end}\n\n"
+           f"• کلِ جدید در این برند: {total_new}\n"
+           f"• این فایل: {len(rows_details)} محصول، {imgs} عکس ({size_mb:.0f} مگابایت)\n\n"
+           f"قوانینت اعمال شده. با عکس تطبیق بده، اصلاح کن و فایل را برگردان — "
+           f"با دکمهٔ «📚 یاد بگیر» از اصلاحاتت یاد می‌گیرم.")
     for oid in _recipients():
-        ok = _tg("sendDocument", {"chat_id": str(oid), "caption": cap},
-                 {"document": (os.path.basename(ts_path), data,
-                               "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")}) and ok
-    return 0
+        _tg("sendDocument", {"chat_id": str(oid), "caption": cap},
+            {"document": (os.path.basename(ts_path), data,
+                          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
 
 
 if __name__ == "__main__":

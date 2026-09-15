@@ -13,6 +13,8 @@
 from __future__ import annotations
 
 import html
+import json
+import os
 import re
 import time
 
@@ -66,6 +68,35 @@ def list_brands() -> list[dict]:
         if bid not in out or (not out[bid]["name"] and name):
             out[bid] = {"id": int(bid), "slug": slug, "name": name}
     return sorted(out.values(), key=lambda b: b["name"] or b["slug"])
+
+
+_DETAIL_CACHE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "irantimer_details")
+
+
+def parse_detail_cached(pid: str) -> dict:
+    """مثلِ parse_detail ولی روی دیسک کش می‌شود.
+
+    صفحهٔ جزئیات گرانِ‌ترین بخشِ کار است (یک درخواست برای هر محصول). با کش، اجرای دوبارهٔ یک برند
+    تقریباً رایگان است — مهم است چون استخراجِ برندهای بزرگ ساعت‌ها طول می‌کشد و اگر وسطش قطع شود
+    نباید همه‌چیز از نو شروع شود. مشخصاتِ فنی عوض نمی‌شوند؛ قیمت/موجودی از این مسیر مصرف نمی‌شود.
+    """
+    p = os.path.join(_DETAIL_CACHE, f"{pid}.json")
+    if os.path.exists(p):
+        try:
+            with open(p, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:  # noqa: BLE001 — کشِ خراب = انگار نبوده
+            pass
+    d = parse_detail(str(pid))
+    try:
+        os.makedirs(_DETAIL_CACHE, exist_ok=True)
+        tmp = p + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(d, f, ensure_ascii=False)
+        os.replace(tmp, p)
+    except Exception:  # noqa: BLE001 — نشدنِ کش نباید کار را بشکند
+        pass
+    return d
 
 
 _H1_RE = re.compile(r'<h1 property="name">(.*?)</h1>', re.S)
