@@ -35,9 +35,11 @@ import crm
 import crm_view
 import db
 import igstats
+import panelview
 import reports
 import woo
 import worktasks
+import wt_message_store
 import wt_finance
 
 # نام فارسی وضعیت‌ها (شامل وضعیت‌های سفارشی فروشگاه مثل deliver)
@@ -91,7 +93,11 @@ def build_caption(order, stock_location=None, summary=None) -> str:
     operations = summary.get("operations")
 
     jdate = reports.jalali_str(f["date_created"]) if f["date_created"] else "—"
-    lines = [
+    lines = []
+    if f.get("in_person"):        # فروشِ حضوری، بالای کارت تا در گروه فوراً دیده شود
+        _br = f.get("in_person_branch") or ""
+        lines.append("🏬 <b>فروش حضوری</b>" + (f" — {_esc(_br)}" if _br else ""))
+    lines += [
         f"🧾 شماره سفارش: <b>{_esc(f['number'])}</b>",
         f"📅 تاریخ سفارش: {_esc(jdate)}",
         _status_line(order),
@@ -193,39 +199,109 @@ def _authorized(update: Update) -> bool:
 
 
 def _main_menu():
+    """منوی اصلی — گروه‌بندی‌شده: پنلِ مدیر (منبعِ واحد)، سپس ووکامرس، پیگیری، ابزار، تیم/مالی."""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📋 خلاصه‌ی مدیریتی (این ماه)", callback_data="rep:overview")],
-        [InlineKeyboardButton("📊 فروش امروز", callback_data="rep:today"),
-         InlineKeyboardButton("📅 این هفته", callback_data="rep:week")],
-        [InlineKeyboardButton("🗓️ این ماه", callback_data="rep:month"),
-         InlineKeyboardButton("📈 کل امسال", callback_data="rep:year")],
-        [InlineKeyboardButton("📆 انتخاب ماه (به تفکیک درگاه)", callback_data="menu:months")],
-        [InlineKeyboardButton("📈 آمار و تحلیل", callback_data="menu:analytics"),
-         InlineKeyboardButton("📦 در انتظار ارسال", callback_data="rep:pending")],
-        [InlineKeyboardButton("📞 پیگیری رهاشده‌ها", callback_data="followup"),
-         InlineKeyboardButton("📊 نتایج پیگیری", callback_data="outcomes")],
-        [InlineKeyboardButton("🖼 تصاویرِ محصولات", callback_data="menu:mediaimg"),
-         InlineKeyboardButton("🔎 استخراجِ برند", callback_data="menu:brand")],
-        [InlineKeyboardButton("💎 سیتیزن", callback_data="menu:citizen")],
-        [InlineKeyboardButton("📦 به‌روزرسانی فایل دیجی‌کالا", callback_data="digikala:start")],
-        [InlineKeyboardButton("💲 قیمت مرجع درخواستی دیجی‌کالا", callback_data="digiref:start")],
-        [InlineKeyboardButton("📄 خروجی اکسل (این ماه)", callback_data="csv:month")],
-        [InlineKeyboardButton("💰 حساب مالی", callback_data="finance:cur")],
-        [InlineKeyboardButton("🔍 جستجوی سفارش", callback_data="search")],
+        [InlineKeyboardButton("📊 امروز", callback_data="panel:today"),
+         InlineKeyboardButton("📈 فروش", callback_data="panel:sales")],
+        [InlineKeyboardButton("⌚ محصولات", callback_data="panel:products"),
+         InlineKeyboardButton("👥 مشتری و باشگاه", callback_data="panel:club")],
+        [InlineKeyboardButton("📣 ترافیک", callback_data="panel:traffic"),
+         InlineKeyboardButton("⚙️ عملیات و CRM", callback_data="panel:ops")],
+        [InlineKeyboardButton("🧾 گزارش‌های ووکامرس", callback_data="menu:woo"),
+         InlineKeyboardButton("📞 پیگیری و لید", callback_data="menu:follow")],
+        [InlineKeyboardButton("🛠 ابزار محصول و تأمین", callback_data="menu:tools"),
+         InlineKeyboardButton("👔 تیم، مالی، اینستاگرام", callback_data="menu:team")],
+        [InlineKeyboardButton("🔍 جستجوی سفارش", callback_data="search"),
+         InlineKeyboardButton("👤 کارت مشتری (شماره)", callback_data="cust:ask")],
+        [InlineKeyboardButton("🔎 رصد رقبا", callback_data="rival:all")],
+        [InlineKeyboardButton("✚ سلامت سایت", callback_data="panel:health"),
+         InlineKeyboardButton("🤖 ربات‌ها و مغز فروش", callback_data="panel:bots")],
+        [InlineKeyboardButton("⇄ بازارچه", callback_data="panel:bazaar")],
     ])
 
 
-def _analytics_menu():
+def _woo_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📈 روند ۶ ماه اخیر", callback_data="rep:trend"),
+        [InlineKeyboardButton("📋 خلاصهٔ مدیریتی ماه", callback_data="rep:overview")],
+        [InlineKeyboardButton("📊 امروز", callback_data="rep:today"),
+         InlineKeyboardButton("📅 هفته", callback_data="rep:week"),
+         InlineKeyboardButton("🗓 ماه", callback_data="rep:month"),
+         InlineKeyboardButton("📈 سال", callback_data="rep:year")],
+        [InlineKeyboardButton("📆 انتخاب ماه (درگاه‌ها)", callback_data="menu:months"),
+         InlineKeyboardButton("📊 مقایسه با ماه قبل", callback_data="rep:compare")],
+        [InlineKeyboardButton("📈 روند ۶ ماه", callback_data="rep:trend"),
          InlineKeyboardButton("🏦 عملکرد درگاه‌ها", callback_data="rep:gwperf")],
-        [InlineKeyboardButton("🏆 پرفروش‌ترین محصولات", callback_data="rep:topproducts"),
+        [InlineKeyboardButton("🏆 پرفروش‌ها", callback_data="rep:topproducts"),
          InlineKeyboardButton("👤 بهترین مشتری‌ها", callback_data="rep:customers")],
-        [InlineKeyboardButton("📊 مقایسه با ماه قبل", callback_data="rep:compare"),
-         InlineKeyboardButton("🧮 آمار کلی", callback_data="rep:stats")],
-        [InlineKeyboardButton("🗺️ تفکیک استان", callback_data="rep:province")],
+        [InlineKeyboardButton("🧮 آمار کلی", callback_data="rep:stats"),
+         InlineKeyboardButton("🗺 تفکیک استان", callback_data="rep:province")],
+        [InlineKeyboardButton("📦 در انتظار ارسال", callback_data="rep:pending"),
+         InlineKeyboardButton("📄 اکسل این ماه", callback_data="csv:month")],
         [InlineKeyboardButton("🔙 منو", callback_data="menu:main")],
     ])
+
+
+def _follow_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📞 ارسال رهاشده‌ها به گروه پیگیری", callback_data="followup")],
+        [InlineKeyboardButton("📊 نتایج پیگیری", callback_data="outcomes"),
+         InlineKeyboardButton("🆕 لیدهای جدید", callback_data="cmd:newleads")],
+        [InlineKeyboardButton("⚙️ عملیات و CRM (پنل)", callback_data="panel:ops")],
+        [InlineKeyboardButton("🔙 منو", callback_data="menu:main")],
+    ])
+
+
+def _tools_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🖼 تصاویر محصولات", callback_data="menu:mediaimg"),
+         InlineKeyboardButton("🔎 استخراج برند", callback_data="menu:brand")],
+        [InlineKeyboardButton("💎 سیتیزن", callback_data="menu:citizen")],
+        [InlineKeyboardButton("📦 فایل دیجی‌کالا", callback_data="digikala:start"),
+         InlineKeyboardButton("💲 قیمت مرجع دیجی‌کالا", callback_data="digiref:start")],
+        [InlineKeyboardButton("🔙 منو", callback_data="menu:main")],
+    ])
+
+
+def _team_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💰 حساب مالی", callback_data="finance:cur")],
+        [InlineKeyboardButton("👥 عملکرد تیم امروز", callback_data="cmd:perf"),
+         InlineKeyboardButton("📆 روند ماهانه", callback_data="cmd:perfmonth")],
+        [InlineKeyboardButton("🗂 مرکز گزارش کار", callback_data="cmd:work"),
+         InlineKeyboardButton("⏱ ساعات کارکرد", callback_data="cmd:hours")],
+        [InlineKeyboardButton("📷 آنالیز اینستاگرام", callback_data="cmd:igreport")],
+        [InlineKeyboardButton("🔙 منو", callback_data="menu:main")],
+    ])
+
+
+def _analytics_menu():  # سازگاری با کدِ قدیمی — همان منوی ووکامرس
+    return _woo_menu()
+
+
+def _panel_kb(tab: str):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 تازه‌سازی", callback_data=f"panel:{tab}:fresh"),
+         InlineKeyboardButton("🌐 باز کردن پنل", url=f"{config.WOO_URL}/manage/#{tab}")],
+        [InlineKeyboardButton("🔙 منو", callback_data="menu:main")],
+    ])
+
+
+async def _send_panel(q, context, tab: str, fresh: bool = False):
+    """یک تب پنل را می‌کشد و تکه‌تکه می‌فرستد؛ تکهٔ آخر دکمه دارد."""
+    await _safe_answer(q, "در حال خواندن از پنل…")
+    parts = await asyncio.to_thread(panelview.render, tab, fresh)
+    chat_id = q.message.chat_id
+    try:
+        await q.edit_message_text(parts[0], parse_mode=ParseMode.HTML,
+                                  reply_markup=(_panel_kb(tab) if len(parts) == 1 else None))
+    except Exception as e:  # noqa: BLE001
+        if "not modified" not in str(e).lower():
+            await context.bot.send_message(chat_id, parts[0], parse_mode=ParseMode.HTML,
+                                           reply_markup=(_panel_kb(tab) if len(parts) == 1 else None))
+    for i, part in enumerate(parts[1:], start=1):
+        last = (i == len(parts) - 1)
+        await context.bot.send_message(chat_id, part, parse_mode=ParseMode.HTML,
+                                       reply_markup=(_panel_kb(tab) if last else None))
 
 
 def _months_menu(jy):
@@ -450,7 +526,8 @@ def _mediaimg_can(uid) -> bool:
 
 
 def _mediaimg_kb(show_apply: bool = False):
-    rows = [[InlineKeyboardButton("🖼 پیش‌نمایشِ درجِ تصاویر", callback_data="mediaimg:preview")]]
+    rows = [[InlineKeyboardButton("📊 وضعیتِ خطِ تولیدِ عکس", callback_data="mediaimg:dash")],
+            [InlineKeyboardButton("🖼 پیش‌نمایشِ درجِ تصاویر", callback_data="mediaimg:preview")]]
     if show_apply:
         rows.insert(0, [InlineKeyboardButton("✅ اعمالِ درجِ تصاویر", callback_data="mediaimg:apply")])
     return InlineKeyboardMarkup(rows)
@@ -484,17 +561,17 @@ async def cmd_media_images(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=_mediaimg_kb(show_apply=True))
 
 
-# ---------- گرفتنِ اکسلِ برند از ایران‌تایمر (ETL) — ادمین‌ها + اپراتور ----------
+# ---------- گرفتنِ اکسلِ برند از کاتالوگِ منبع (ETL) — ادمین‌ها + اپراتور ----------
 # منبع‌های استخراج → (فایلِ جاب، نامِ envِ برند، نامِ envِ آفست، برچسب)
 _BRAND_SITES = {
-    "irantimer": ("irantimer_extract_job.py", "IT_BRAND", "IT_OFFSET", "ایران‌تایمر"),
+    "irantimer": ("irantimer_extract_job.py", "IT_BRAND", "IT_OFFSET", "کاتالوگِ منبع"),
     "ttbol": ("ttbol_extract_job.py", "TB_BRAND", "TB_OFFSET", "ttbol.ir"),
 }
 
 
 def _brand_site_kb():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📗 ایران‌تایمر", callback_data="brandsite:irantimer")],
+        [InlineKeyboardButton("📗 کاتالوگِ منبع", callback_data="brandsite:irantimer")],
         [InlineKeyboardButton("📘 ttbol.ir", callback_data="brandsite:ttbol")],
     ])
 
@@ -516,17 +593,17 @@ def _spawn_extract(brand: str, site: str = "irantimer", offset: int = 0):
 
 
 async def cmd_extract_brand(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """دکمهٔ «گرفتنِ اکسلِ برندِ ایران‌تایمر» (ادمین‌ها + اپراتور، فقط پیوی)."""
+    """دکمهٔ «گرفتنِ اکسلِ برندِ کاتالوگِ منبع» (ادمین‌ها + اپراتور، فقط پیوی)."""
     u = update.effective_user
     if not u or not _mediaimg_can(u.id):
         return
     if update.effective_chat and update.effective_chat.type != "private":
         await update.message.reply_text("🔒 فقط در چتِ خصوصی با ربات.")
         return
-    if context.args:  # /brand <name> → پیش‌فرض ایران‌تایمر (سازگاریِ عقب)
+    if context.args:  # /brand <name> → پیش‌فرض کاتالوگِ منبع (سازگاریِ عقب)
         brand = " ".join(context.args)
         _spawn_extract(brand, "irantimer")
-        await update.message.reply_text(f"⏳ «{brand}» از ایران‌تایمر شروع شد؛ اکسلِ محصولاتِ جدید می‌آید.")
+        await update.message.reply_text(f"⏳ «{brand}» از کاتالوگِ منبع شروع شد؛ اکسلِ محصولاتِ جدید می‌آید.")
     else:
         await update.message.reply_text("📥 محصولاتِ برند را از کدام سایت استخراج کنم؟", reply_markup=_brand_site_kb())
 
@@ -566,11 +643,21 @@ async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     f = await context.bot.get_file(msg.document.file_id)
     await f.download_to_drive(path)
     context.user_data["it_import_file"] = path
+    # اگر این فایل اصلاحِ یکی از اکسل‌هایی است که خودمان فرستاده بودیم، دکمهٔ یادگیری هم بیاید
+    learn_btn = []
+    try:
+        import irantimer_learn as _il
+        if _il.find_original(path):
+            learn_btn = [[InlineKeyboardButton("📚 از اصلاحاتم یاد بگیر", callback_data="itlearn:go")]]
+    except Exception as e:  # noqa: BLE001 — نبودنِ اصلِ فایل نباید جلوی درج را بگیرد
+        print(f"[itlearn] find_original: {e!r}")
     await msg.reply_text(
         "📥 اکسل دریافت شد.\n\nاول «پیش‌نمایش» را بزن (چیزی روی سایت ساخته نمی‌شود، فقط گزارش). "
         "بعد «درجِ روی سایت» تا محصولات به‌صورتِ پیش‌نویس ساخته شوند (تکراری‌ها با رفرنس رد می‌شوند).\n\n"
-        "یادآوری: عکس‌ها جدا با دکمهٔ /media_images می‌چسبند.",
-        reply_markup=InlineKeyboardMarkup([
+        + ("📚 اگر سلولی را اصلاح کرده‌ای، دکمهٔ «یاد بگیر» را هم بزن تا دفعهٔ بعد خودم درست بسازم.\n\n"
+           if learn_btn else "")
+        + "یادآوری: عکس‌ها جدا با دکمهٔ /media_images می‌چسبند.",
+        reply_markup=InlineKeyboardMarkup(learn_btn + [
             [InlineKeyboardButton("🔸 پیش‌نمایش (بدونِ ساخت)", callback_data="itimport:dry")],
             [InlineKeyboardButton("⬆️ درجِ روی سایت (پیش‌نویس)", callback_data="itimport:apply")],
         ]))
@@ -612,20 +699,42 @@ def _followup_group():
     return int(db.get_meta("followup_group") or config.FOLLOWUP_GROUP_ID or 0)
 
 
+def _tg_chunks(text: str, limit: int = 3900) -> list:
+    """تلگرام بیش از ۴۰۹۶ نویسه را رد می‌کند؛ گزارشِ شبانه از آن رد شده بود و هر شب به هیچ مدیری نمی‌رسید.
+    شکستن روی خطِ خالی، بعد روی خط، و در نهایت سخت — تا تگِ HTML وسطِ راه نبُرد."""
+    text = text or ""
+    if len(text) <= limit:
+        return [text]
+    out, cur = [], ""
+    for para in text.split("\n"):
+        piece = (para + "\n")
+        if len(cur) + len(piece) > limit and cur:
+            out.append(cur.rstrip("\n")); cur = ""
+        while len(piece) > limit:  # یک خطِ خیلی بلند
+            out.append(piece[:limit]); piece = piece[limit:]
+        cur += piece
+    if cur.strip():
+        out.append(cur.rstrip("\n"))
+    return out or [text[:limit]]
+
+
 async def send_to_managers(app, text, parse_mode=None, reply_markup=None):
-    """گزارش‌های مدیریتی فقط به مدیران: REPORTS_CHAT_ID، وگرنه پیویِ تک‌تکِ ادمین‌ها."""
-    if config.REPORTS_CHAT_ID:
-        try:
-            await app.bot.send_message(config.REPORTS_CHAT_ID, text, parse_mode=parse_mode,
-                                       reply_markup=reply_markup)
-        except Exception as e:
-            print(f"[managers] ارسال به REPORTS_CHAT_ID ناموفق: {e!r}")
-        return
-    for uid in config.ADMIN_USER_IDS:
-        try:
-            await app.bot.send_message(uid, text, parse_mode=parse_mode, reply_markup=reply_markup)
-        except Exception as e:
-            print(f"[managers] ارسال به {uid} ناموفق: {e!r}")
+    """گزارش‌های مدیریتی فقط به مدیران: REPORTS_CHAT_ID، وگرنه پیویِ تک‌تکِ ادمین‌ها. پیامِ بلند تکه می‌شود."""
+    parts = _tg_chunks(text)
+    targets = [config.REPORTS_CHAT_ID] if config.REPORTS_CHAT_ID else list(config.ADMIN_USER_IDS)
+    for uid in targets:
+        for i, part in enumerate(parts):
+            last = (i == len(parts) - 1)
+            try:
+                await app.bot.send_message(uid, part, parse_mode=parse_mode,
+                                           reply_markup=(reply_markup if last else None))
+            except Exception as e:
+                print(f"[managers] ارسال به {uid} (بخش {i + 1}/{len(parts)}) ناموفق: {e!r}")
+                if parse_mode and "parse" in str(e).lower():  # تکه‌ای که تگش نصفه شد → همان تکه بدونِ HTML
+                    try:
+                        await app.bot.send_message(uid, part, reply_markup=(reply_markup if last else None))
+                    except Exception as e2:
+                        print(f"[managers] ارسالِ بدونِ قالب هم ناموفق: {e2!r}")
 
 
 # ---------- CRM (تیمِ فروش: ادمین‌ها یا گروهِ پیگیری) ----------
@@ -637,11 +746,22 @@ def _crm_can_read(q) -> bool:
     return chat_id == _followup_group()
 
 
+class _Actor(str):
+    """نامِ نمایشیِ اپراتور که شناسهٔ تلگرامش را هم با خود دارد.
+
+    CRM فقط به actor_user_id (کاربرِ وردپرس) اعتماد می‌کند و نامِ آزاد را کنار می‌گذارد؛ تا قبل از این
+    فقط نام می‌رفت و همان اپراتور در گزارش‌ها دو نفر می‌شد. crm.py این شناسه را به کاربرِ سایت نگاشت می‌کند.
+    """
+    uid = 0
+
+
 def _actor_name(user) -> str:
-    """نامِ نمایشیِ اپراتورِ زننده برای ثبت در CRM."""
+    """نامِ نمایشیِ اپراتورِ زننده برای ثبت در CRM (+ شناسهٔ تلگرام روی .uid)."""
     if not user:
-        return "اپراتور"
-    return user.full_name or (("@" + user.username) if user.username else str(user.id))
+        return _Actor("اپراتور")
+    a = _Actor(user.full_name or (("@" + user.username) if user.username else str(user.id)))
+    a.uid = int(user.id or 0)
+    return a
 
 
 async def _crm_card(phone):
@@ -1532,12 +1652,107 @@ async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await msg.reply_text(_MENU_TITLE, reply_markup=_main_menu(), parse_mode=ParseMode.HTML)
 
 
+async def _handle_img(q, context):
+    """دکمه‌های «تأیید و درج» / «رد» روی پیشنهادِ عکسِ یک محصول (خطِ لولهٔ عکس).
+
+    فقط مالک/ادمین‌ها؛ خودِ گذارِ حالت در imgapprove انجام می‌شود و upload بعدیِ خط لوله
+    (هر ۵ دقیقه) کارِ درج را می‌کند — این‌جا هیچ نوشتنی روی سایت نیست.
+    """
+    import imgapprove
+
+    if not q.from_user or q.from_user.id not in config.ADMIN_USER_IDS:
+        await _safe_answer(q, "فقط مدیران.", show_alert=True)
+        return
+
+    data = q.data or ""
+    parts = data.split(":")
+    if len(parts) != 3 or not parts[2].isdigit():
+        await _safe_answer(q, "دکمهٔ نامعتبر.", show_alert=True)
+        return
+    action, job_id = parts[1], int(parts[2])
+    who = (q.from_user.full_name or str(q.from_user.id))[:60]
+
+    await _safe_answer(q, "در حال ثبت…")
+    fn = imgapprove.approve if action == "ok" else imgapprove.reject
+    res = await asyncio.to_thread(fn, job_id, who)
+
+    mark = "✅ تأیید شد" if action == "ok" else "❌ رد شد"
+    if not res.get("ok"):
+        mark = "⚠️ " + str(res.get("msg") or "انجام نشد")
+    try:
+        await q.edit_message_text(f"{q.message.text_html if q.message else ''}\n\n<b>{mark}</b> — {who}",
+                                  parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+    except Exception:
+        pass
+
+
+def _mwatch_kb(site_id: str):
+    """دکمه‌های زیرِ گزارشِ رصد: فهرستِ رفرنس‌های مشکل‌دار، به تفکیک."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📋 همهٔ رفرنس‌های مشکل‌دار", callback_data=f"mwatch:refs:{site_id}")],
+        [InlineKeyboardButton("🔴 ارزان‌تر از ما", callback_data=f"mwatch:cheaper:{site_id}"),
+         InlineKeyboardButton("📦 مغایرت موجودی", callback_data=f"mwatch:stock:{site_id}")],
+    ])
+
+
+async def send_market_watch(bot, chat_id: int, site_id: str) -> bool:
+    """گزارشِ یک سایت را به پی‌وی می‌فرستد، با دکمه‌های رفرنس زیرش."""
+    import market_watch as mw
+    res = mw.load(site_id)
+    if not res:
+        return False
+    await bot.send_message(chat_id=chat_id, text=mw.summary_text(res), parse_mode=ParseMode.HTML,
+                           reply_markup=_mwatch_kb(site_id), disable_web_page_preview=True)
+    return True
+
+
+
+def _rival_menu_kb():
+    import market_intel as mi
+    rows = [[InlineKeyboardButton(s["name"], callback_data=f"rival:site:{s['id']}")] for s in mi.mw.SITES]
+    return InlineKeyboardMarkup(rows)
+
+
+def _rival_site_kb(site_id: str):
+    """زیرِ هر عددِ کارت، دکمه‌ای که ریزش را می‌آورد."""
+    s = site_id
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("💰 ارزان‌تر از ما", callback_data=f"rival:cheap:{s}"),
+         InlineKeyboardButton("💰 گران‌تر از ما", callback_data=f"rival:dear:{s}")],
+        [InlineKeyboardButton("🛒 چه فروخته", callback_data=f"rival:sold:{s}"),
+         InlineKeyboardButton("🆕 چه آورده", callback_data=f"rival:new:{s}")],
+        [InlineKeyboardButton("🗑 چه برداشته", callback_data=f"rival:gone:{s}"),
+         InlineKeyboardButton("↩️ برگشت به قفسه", callback_data=f"rival:back:{s}")],
+        [InlineKeyboardButton("📈 گران کرد", callback_data=f"rival:up:{s}"),
+         InlineKeyboardButton("📉 ارزان کرد", callback_data=f"rival:down:{s}")],
+        [InlineKeyboardButton("🚩 دارد و ما نداریم", callback_data=f"rival:bt:{s}"),
+         InlineKeyboardButton("✅ ما داریم و او ندارد", callback_data=f"rival:bo:{s}")],
+        [InlineKeyboardButton("🏷 برندهای مشترک", callback_data=f"rival:bs:{s}")],
+        [InlineKeyboardButton("🔙 رقبا", callback_data="rival:all")],
+    ])
+
+
+
+async def cmd_rivals(update, context):
+    """/rivals — نمای رقبا برای مدیر."""
+    u = update.effective_user
+    if not u or u.id not in config.ADMIN_USER_IDS:
+        return
+    import market_intel as mi
+    await update.effective_message.reply_text(mi.overview(), parse_mode=ParseMode.HTML,
+                                              reply_markup=_rival_menu_kb(),
+                                              disable_web_page_preview=True)
+
+
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     if not q:
         return
     data = q.data or ""
     print(f"[cb] دریافت: {data} از {q.from_user.id if q.from_user else '?'}")
+    if data.startswith("img:"):  # خطِ لولهٔ عکس: تأیید/ردِ عکسِ یک محصول پیش از درج
+        await _handle_img(q, context)
+        return
     if data.startswith("wt:"):  # گزارشِ کار: بستنِ تسک
         await worktasks.on_callback_hook(q, context)
         return
@@ -1550,6 +1765,67 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         await _handle_crm(q, context)
         return
+    if data.startswith("mwatch:"):   # رصدِ سایتِ فروشگاه‌های دیگر — فقط مدیر
+        if not q.from_user or q.from_user.id not in config.ADMIN_USER_IDS:
+            await _safe_answer(q, "دسترسی ندارید.", show_alert=True)
+            return
+        await _safe_answer(q)
+        import market_watch as mw
+        parts = data.split(":")
+        kind = parts[1] if len(parts) > 1 else "refs"
+        site_id = parts[2] if len(parts) > 2 else ""
+        res = mw.load(site_id)
+        if not res:
+            await q.edit_message_text("گزارشی برای این سایت ذخیره نشده.")
+            return
+        if kind == "back":
+            await q.edit_message_text(mw.summary_text(res), parse_mode=ParseMode.HTML,
+                                      reply_markup=_mwatch_kb(site_id), disable_web_page_preview=True)
+            return
+        txt = mw.refs_text(res, kind if kind in ("cheaper", "stock") else "all")
+        await q.edit_message_text(txt[:4000], parse_mode=ParseMode.HTML,
+                                  reply_markup=InlineKeyboardMarkup([[
+                                      InlineKeyboardButton("🔙 خلاصه", callback_data=f"mwatch:back:{site_id}")]]),
+                                  disable_web_page_preview=True)
+        return
+
+    if data.startswith("rival:"):   # رصد رقبا — فقط مدیر
+        if not q.from_user or q.from_user.id not in config.ADMIN_USER_IDS:
+            await _safe_answer(q, "دسترسی ندارید.", show_alert=True)
+            return
+        await _safe_answer(q)
+        import market_intel as mi
+        parts = data.split(":")
+        kind = parts[1] if len(parts) > 1 else "all"
+        sid = parts[2] if len(parts) > 2 else ""
+        if kind == "all":
+            await q.edit_message_text(mi.overview(), parse_mode=ParseMode.HTML,
+                                      reply_markup=_rival_menu_kb(), disable_web_page_preview=True)
+            return
+        if kind == "site":
+            await q.edit_message_text(mi.report(sid), parse_mode=ParseMode.HTML,
+                                      reply_markup=_rival_site_kb(sid), disable_web_page_preview=True)
+            return
+        detail = {"cheap": lambda: mi.price_list(sid, "cheaper"),
+                  "dear": lambda: mi.price_list(sid, "dearer"),
+                  "bt": lambda: mi.brand_list(sid, "theirs"),
+                  "bo": lambda: mi.brand_list(sid, "ours"),
+                  "bs": lambda: mi.brand_list(sid, "shared"),
+                  "brands": lambda: mi.brands_text(sid),
+                  "restock": lambda: mi.restock_text(sid)}
+        if kind in detail:
+            text = detail[kind]()
+        elif kind in ("sold", "new", "gone", "up", "down", "back"):
+            text = mi.change_list(sid, kind)
+        else:
+            text = mi.report(sid)
+        await q.edit_message_text(text[:4000], parse_mode=ParseMode.HTML,
+                                  reply_markup=InlineKeyboardMarkup([[
+                                      InlineKeyboardButton("🔙 بازگشت", callback_data=f"rival:site:{sid}")]]),
+                                  disable_web_page_preview=True)
+        return
+
+
     if data.startswith("restcards:"):  # ارسالِ باقی‌مانده‌ها به گروه — فقط ادمین (از پیوی یا گروه)
         if not q.from_user or q.from_user.id not in config.ADMIN_USER_IDS:
             await _safe_answer(q, "فقط مدیران.", show_alert=True)
@@ -1612,6 +1888,40 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["awaiting_it_brand"] = True
         await q.edit_message_text(f"📥 نامِ برند را بفرست (منبع: {lbl}) — مثلاً «سیتیزن» یا «لی کوپر».")
         return
+    if data == "itlearn:go":        # یادگیری از اصلاحاتِ اپراتور روی اکسلِ استخراج
+        if not q.from_user or not _mediaimg_can(q.from_user.id):
+            await _safe_answer(q, "دسترسی ندارید.", show_alert=True)
+            return
+        await _safe_answer(q)
+        import os as _os
+        path = context.user_data.get("it_import_file")
+        if not path or not _os.path.exists(path):
+            await q.edit_message_text("⚠️ فایلی پیدا نشد. دوباره اکسلِ اصلاح‌شده را آپلود کن.")
+            return
+        await q.edit_message_text("📚 دارم اصلاحاتت را می‌خوانم…")
+        try:
+            import irantimer_learn as _il
+            import irantimer_map as _im
+            orig = _il.find_original(path)
+            if not orig:
+                await q.edit_message_text("⚠️ اکسلِ اصلیِ متناظر پیدا نشد، پس نمی‌توانم تفاوت‌ها را دربیاورم.")
+                return
+            res = await asyncio.to_thread(_il.learn_from_files, orig, path, True)
+            _im.reload_overrides()
+            s = res["stats"]
+            txt = (f"📚 یاد گرفتم — از {s['changes']} اصلاح:\n\n"
+                   f"• {s['value_map']} قاعدهٔ نگاشت (روی همهٔ برندهای بعدی اثر دارد)\n"
+                   f"• {s['brand_const']} ثابتِ برند\n"
+                   f"• {s['per_ref']} اصلاحِ تک‌محصولی\n")
+            if s["conflicts"]:
+                txt += (f"\n⚠️ {s['conflicts']} تضاد: یک مقدارِ منبع قبلاً جورِ دیگری اصلاح شده بود. "
+                        f"نظرِ تازه‌ات اعمال شد ولی برای مالک ثبت شد.\n")
+            txt += "\nدفعهٔ بعد این‌ها خودکار درست ساخته می‌شوند. ممنون گلی 🌸"
+            await q.edit_message_text(txt)
+        except Exception as e:  # noqa: BLE001
+            print(f"[itlearn] {e!r}")
+            await q.edit_message_text(f"⚠️ یادگیری انجام نشد: {type(e).__name__}")
+        return
     if data in ("itimport:dry", "itimport:apply"):   # درجِ اکسل روی سایت — ادمین‌ها + اپراتور
         if not q.from_user or not _mediaimg_can(q.from_user.id):
             await _safe_answer(q, "دسترسی ندارید.", show_alert=True)
@@ -1626,6 +1936,20 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _spawn_import(path, dry)
         await q.edit_message_text("🔸 پیش‌نمایش شروع شد؛ گزارش می‌آید (چیزی ساخته نشد)." if dry
                                   else "⬆️ درج شروع شد؛ محصولات به‌صورتِ پیش‌نویس ساخته می‌شوند و گزارشِ اکسل می‌آید.")
+        return
+    if data == "mediaimg:dash":     # داشبوردِ خطِ تولیدِ عکس — همان دسترسیِ درجِ تصاویر
+        if not q.from_user or not _mediaimg_can(q.from_user.id):
+            await _safe_answer(q, "دسترسی ندارید.", show_alert=True)
+            return
+        await _safe_answer(q)
+        try:
+            import imgdash
+            text = imgdash.render()
+        except Exception as e:   # noqa: BLE001 — داشبورد نباید ربات را بخواباند
+            text = f"📊 داشبوردِ خطِ تولیدِ عکس در دسترس نیست: {e}"
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("🔄 به‌روزرسانی", callback_data="mediaimg:dash")],
+                                   [InlineKeyboardButton("⬅️ بازگشت", callback_data="menu:mediaimg")]])
+        await q.edit_message_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
         return
     if data in ("mediaimg:preview", "mediaimg:apply"):   # درجِ تصاویر — ادمین‌ها + اپراتور (قبل از گیتِ فقط‌ادمین)
         if not q.from_user or not _mediaimg_can(q.from_user.id):
@@ -1650,6 +1974,8 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _safe_answer(q,)
     if data != "search":
         context.user_data["awaiting_search"] = False
+    if data != "cust:ask":
+        context.user_data["awaiting_customer"] = False
     try:
         if data == "search":
             context.user_data["awaiting_search"] = True
@@ -1659,6 +1985,28 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         elif data == "menu:main":
             await q.edit_message_text(_MENU_TITLE, reply_markup=_main_menu(), parse_mode=ParseMode.HTML)
+        elif data.startswith("panel:"):
+            _, tab, *rest = data.split(":")
+            await _send_panel(q, context, tab, fresh=(rest[:1] == ["fresh"]))
+        elif data == "menu:woo":
+            await q.edit_message_text("🧾 <b>گزارش‌های ووکامرس</b>", reply_markup=_woo_menu(), parse_mode=ParseMode.HTML)
+        elif data == "menu:follow":
+            await q.edit_message_text("📞 <b>پیگیری و لید</b>", reply_markup=_follow_menu(), parse_mode=ParseMode.HTML)
+        elif data == "menu:tools":
+            await q.edit_message_text("🛠 <b>ابزار محصول و تأمین</b>", reply_markup=_tools_menu(), parse_mode=ParseMode.HTML)
+        elif data == "menu:team":
+            await q.edit_message_text("👔 <b>تیم، مالی، اینستاگرام</b>", reply_markup=_team_menu(), parse_mode=ParseMode.HTML)
+        elif data == "cust:ask":
+            context.user_data["awaiting_customer"] = True
+            await q.edit_message_text("👤 شمارهٔ موبایل مشتری را بفرستید (مثل 0912…):", reply_markup=_back_kb())
+        elif data.startswith("cmd:"):
+            # دستورهای تیمی همان هندلرِ دستورند؛ از دکمه با همان Update صدا می‌شوند.
+            await _safe_answer(q)
+            name = data.split(":", 1)[1]
+            fn = {"perf": worktasks.cmd_perf, "perfmonth": worktasks.cmd_perfmonth, "work": worktasks.cmd_work,
+                  "hours": worktasks.cmd_hours, "igreport": igstats.cmd_igreport, "newleads": cmd_newcards}.get(name)
+            if fn:
+                await fn(update, context)
         elif data == "menu:months":
             await q.edit_message_text("📆 یک ماه را انتخاب کنید:", reply_markup=_months_menu(reports.current_jyear()))
         elif data.startswith("months:"):
@@ -1669,6 +2017,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("✅ اعمالِ درجِ تصاویر", callback_data="mediaimg:apply")],
                 [InlineKeyboardButton("🖼 پیش‌نمایش (اکسلِ بی‌عکس‌ها)", callback_data="mediaimg:preview")],
+                [InlineKeyboardButton("📊 وضعیتِ خطِ تولیدِ عکس", callback_data="mediaimg:dash")],
                 [InlineKeyboardButton("⬅️ بازگشت", callback_data="menu:main")]])
             await q.edit_message_text(
                 "🖼 <b>تصاویرِ محصولات</b>\nمحصولاتِ بی‌عکسِ اخیر را با کتابخانهٔ رسانه (بر اساسِ رفرنس) تطبیق می‌دهد.\n"
@@ -1777,7 +2126,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def _record_atefeh_qa(user, text: str) -> str:
-    """سؤال/بازخوردِ اپراتور (بازبینیِ دفترچه/نمونهٔ ایران‌تایمر) را برای پاسخ‌گویی ذخیره می‌کند."""
+    """سؤال/بازخوردِ اپراتور (بازبینیِ دفترچه/نمونهٔ کاتالوگِ منبع) را برای پاسخ‌گویی ذخیره می‌کند."""
     import datetime as _dt
     import json as _json
     import os as _os
@@ -1880,7 +2229,7 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text(f"⏳ «{brand}» از {lbl} شروع شد؛ اکسلِ محصولاتِ جدید (بدونِ تکرارِ سایت) می‌آید.")
         return
 
-    # پلِ پرسش‌وپاسخِ اپراتور (بازبینیِ دفترچه/نمونهٔ ایران‌تایمر): سؤال/بازخوردش را ذخیره + به مالک اطلاع.
+    # پلِ پرسش‌وپاسخِ اپراتور (بازبینیِ دفترچه/نمونهٔ کاتالوگِ منبع): سؤال/بازخوردش را ذخیره + به مالک اطلاع.
     # ریپلای هم گرفته می‌شود (ریپلای‌های CRM بالاتر return شده‌اند، پس اینجا فقط سؤال/بازخوردِ اوست).
     if _cu and _cu.id == getattr(config, "WT_MEDIAIMG_OPERATOR_ID", 0) \
             and update.effective_chat and update.effective_chat.type == "private" \
@@ -1892,6 +2241,22 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await context.application.bot.send_message(oid, f"❓ از اپراتور (بازبینیِ دفترچه):\n\n{msg.text.strip()}")
             except Exception:  # noqa: BLE001
                 pass
+        return
+
+    if context.user_data.get("awaiting_customer") and _authorized(update):
+
+        context.user_data["awaiting_customer"] = False
+
+        ph = crm.normalize_phone(msg.text or "")
+
+        if len(ph) == 11:
+
+            await msg.reply_text(await asyncio.to_thread(panelview.customer_text, ph), parse_mode=ParseMode.HTML, reply_markup=_back_kb())
+
+            return
+
+        await msg.reply_text("شماره معتبر نیست.", reply_markup=_back_kb())
+
         return
 
     if not _authorized(update) or not context.user_data.get("awaiting_search"):
@@ -1990,7 +2355,21 @@ async def cmd_fixcaptions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await msg.reply_text(f"✅ تمام: {_fa(edited)} کپشن به‌روزرسانی شد از {_fa(len(ids))} سفارشِ بررسی‌شده.")
 
 
+async def _capture_mw(update, context):
+    """Stage 2A ingestion: پیام را زودتر از هندلرهای کاری، غیرمخرب و fail-soft، در انبار ذخیره می‌کند.
+    در group=-1 اجرا می‌شود (قبل از group 0)، propagation را متوقف نمی‌کند، و هیچ mutationِ مدیریتی نمی‌سازد."""
+    try:
+        wt_message_store.capture(update)
+    except Exception as e:  # noqa: BLE001 — capture هرگز نباید مسیرِ اصلی را بشکند
+        print(f"[msgstore] capture_mw error: {e!r}")
+    # عمداً هیچ ApplicationHandlerStop نمی‌دهیم → هندلرهای group 0 عادی اجرا می‌شوند
+
+
 def register_handlers(app: Application):
+    # Stage 2A: میدل‌ورِ capture در group=-1 (قبل از همه، بدونِ توقفِ propagation). scope/flag داخلِ خودِ store.
+    app.add_handler(MessageHandler(filters.ALL, _capture_mw), group=-1)
+    import owner_daily  # واردسازیِ تنبل (owner_daily خودش telegram_io را می‌خواند)
+    app.add_handler(CommandHandler("dailyreport", owner_daily.cmd_dailyreport))
     app.add_handler(CommandHandler("start", cmd_menu))
     app.add_handler(CommandHandler("menu", cmd_menu))
     app.add_handler(CommandHandler("help", cmd_menu))
@@ -1998,6 +2377,7 @@ def register_handlers(app: Application):
     app.add_handler(CommandHandler("range", cmd_range))
     app.add_handler(CommandHandler("crm", cmd_crm))
     app.add_handler(CommandHandler("citizen", cmd_citizen))
+    app.add_handler(CommandHandler("rasad", cmd_rivals))
     app.add_handler(CommandHandler("media_images", cmd_media_images))
     app.add_handler(CommandHandler("brand", cmd_extract_brand))
     app.add_handler(CommandHandler("newleads", cmd_newcards))

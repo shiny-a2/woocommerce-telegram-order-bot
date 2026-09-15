@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import sys
 import urllib.request
 import uuid
@@ -78,14 +79,47 @@ def _norm(s):
     return (s or "").strip()
 
 
+def _catalog():
+    """کاتالوگِ کاملِ برندهای کاتالوگِ منبع (scripts/irantimer_brand_catalog.py می‌سازدش)."""
+    try:
+        with open(os.path.join(_DATA, "irantimer_brands_v2.json"), encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:  # noqa: BLE001
+        return []
+
+
+def _key(s):
+    """کلیدِ تطبیقِ نامِ فارسی: فاصله/نیم‌فاصله حذف، ی/ک عربی → فارسی."""
+    s = (s or "").strip().replace("ي", "ی").replace("ك", "ک")
+    return re.sub(r"[\s‌\-_.]+", "", s)
+
+
 def resolve_brand(name):
+    """نامِ فارسیِ برند → (irantimer Brand ID، ترمِ برندِ سایت، نامِ متعارف).
+
+    اول جدولِ دستی (ترم‌هایش دستی تأیید شده‌اند)، بعد کاتالوگِ کاملِ ۲۰۶ برند.
+    قبلاً فقط جدولِ دستیِ ۲۳تایی بود، برای همین برندهای بزرگی مثلِ سیکو و کاسیو
+    اصلاً پیدا نمی‌شدند هرچند روی کاتالوگِ منبع هزاران محصول دارند.
+    """
     name = _norm(name)
     for k, (bid, term) in BRANDS.items():
-        if name == k or name.replace(" ", "") == k.replace(" ", ""):
+        if _key(name) == _key(k):
             if term is None:  # ترمِ سایت را پویا پیدا کن
                 term = _site_term(name)
             return bid, term, k
+    for b in _catalog():
+        if _key(name) == _key(b.get("name")):
+            return b["id"], _site_term(b["name"]) or _site_term(name), b["name"]
     return None, None, None
+
+
+def known_brands():
+    """نام‌های قابلِ استفاده برای پیامِ خطا — جدولِ دستی + کاتالوگ، پرمحصول‌ترین‌ها اول."""
+    names = {_norm(k) for k in BRANDS}
+    for b in sorted(_catalog(), key=lambda x: -(x.get("total") or 0)):
+        if b.get("name"):
+            names.add(b["name"])
+    return sorted(names)
 
 
 def _site_term(name):
@@ -169,7 +203,9 @@ def run(brand_name, offset=0, batch=None):
     if not bid:
         for oid in _recipients():
             _tg("sendMessage", {"chat_id": str(oid),
-                "text": f"❌ برندِ «{brand_name}» در نگاشتِ کاتالوگِ منبع نیست. برندهای موجود: {'، '.join(sorted(set(BRANDS)))}"})
+                "text": (f"❌ برندِ «{brand_name}» روی کاتالوگِ منبع پیدا نشد.\n\n"
+                         f"پرمحصول‌ترین برندها: {'، '.join(known_brands()[:40])}\n\n"
+                         f"(روی هم {len(known_brands())} برند شناخته می‌شود — نامِ فارسی را دقیق بنویس.)")})
         return 1
     for oid in _recipients():
         _tg("sendMessage", {"chat_id": str(oid),
@@ -184,6 +220,10 @@ def run(brand_name, offset=0, batch=None):
     for p in chunk:
         try:
             d = it.parse_detail(str(p["id"]))
+            # رفرنس از صفحهٔ فهرست می‌آید و صفحهٔ جزئیات همیشه ندارد؛ اگر نبود همان را می‌گذاریم،
+            # وگرنه ستونِ «رفرانس» در اکسل خالی می‌ماند (همان چیزی که مالک دید).
+            if not d.get("ref") and p.get("ref"):
+                d["ref"] = p["ref"]
             rows_details.append((im.map_product(d, canon), d))
         except Exception:  # noqa: BLE001
             continue

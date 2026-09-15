@@ -53,6 +53,88 @@ def _load_value_maps():
 
 VALUE_MAPS = _load_value_maps()
 
+# ---------- اصلاحاتِ یادگرفته‌شده از بازبینیِ اپراتور ----------
+# این فایل را irantimer_learn.py از تفاوتِ «اکسلی که فرستادیم» و «اکسلی که اصلاح‌شده برگشت» می‌سازد.
+# اینجا فقط خوانده می‌شود (نوشتن کارِ ماژولِ یادگیری است) تا وابستگیِ حلقوی پیش نیاید.
+OVERRIDES_PATH = os.path.join(_HERE, "data", "atefeh_overrides.json")
+
+
+def load_overrides() -> dict:
+    try:
+        import json
+        with open(OVERRIDES_PATH, encoding="utf-8") as f:
+            d = json.load(f)
+    except Exception:  # noqa: BLE001 — نبودنِ فایل حالتِ عادیِ قبل از اولین بازبینی است
+        d = {}
+    d.setdefault("version", 1)
+    for k in ("value_maps", "brand_const", "per_ref"):
+        d.setdefault(k, {})
+    for k in ("conflicts", "log"):
+        d.setdefault(k, [])
+    return d
+
+
+OVERRIDES = load_overrides()
+
+
+def reload_overrides() -> dict:
+    """بعد از یک دورِ یادگیری صدا زده می‌شود تا اجرای بعدی تازه‌ترین قواعد را ببیند."""
+    global OVERRIDES
+    OVERRIDES = load_overrides()
+    return OVERRIDES
+
+
+# ---------- واژگانِ بستهٔ سایت ----------
+# قاعدهٔ مالک: «چیزهایی مثل رنگ که برایت قابلِ تشخیص و استنادِ ۱۰۰٪ نیست را خالی بگذار.»
+# پس هیچ مقداری صرفاً چون در منبع بود روی ستونِ سایت نمی‌نشیند؛ فقط مقادیری که واقعاً ترمِ
+# موجودِ همان اتریبیوت روی سایت‌اند. بقیه خالی می‌مانند تا اپراتور خودش تصمیم بگیرد.
+_TERMS_PATH = os.path.join(_HERE, "data", "site_attr_terms.json")
+
+
+def _load_site_terms() -> dict:
+    try:
+        import json
+        with open(_TERMS_PATH, encoding="utf-8") as f:
+            raw = json.load(f)
+    except Exception:  # noqa: BLE001
+        return {}
+    out = {}
+    for attr, v in raw.items():
+        vals = v if isinstance(v, list) else (v.get("terms") if isinstance(v, dict) else None)
+        if vals:
+            out[_norm(attr)] = {_norm(x) for x in vals}
+    return out
+
+
+SITE_TERMS = _load_site_terms()
+
+
+def allowed(attr: str, value: str) -> bool:
+    """آیا این مقدار ترمِ مجازِ همین اتریبیوت روی سایت است؟
+
+    اگر واژگانِ آن اتریبیوت را نداشته باشیم، جلوی مقدار را نمی‌گیریم (وگرنه ستون‌هایی مثل
+    سایز/وزن که ترمِ ثابت ندارند همیشه خالی می‌شدند).
+    """
+    vocab = SITE_TERMS.get(_norm(attr))
+    if not vocab:
+        return True
+    return _norm(value) in vocab
+
+
+def keep_allowed(attr: str, value: str) -> str:
+    """فقط بخش‌های مجاز را نگه می‌دارد؛ اگر چیزی نماند، خالی."""
+    if not value:
+        return ""
+    parts = [p for p in (_norm(x) for x in value.split(_SEP.strip())) if p]
+    good = [p for p in parts if allowed(attr, p)]
+    return _SEP.join(good) if good else ""
+
+
+def _learned(attr: str, raw: str) -> str:
+    """نگاشتِ یادگرفته‌شده برای یک مقدارِ خام — بر دفترچه اولویت دارد چون نظرِ صریحِ اپراتور است."""
+    rec = (OVERRIDES.get("value_maps", {}).get(attr) or {}).get(_norm(raw))
+    return rec.get("value", "") if rec else ""
+
 # نامِ اتریبیوتِ سایت ← کلیدِ specsِ کاتالوگِ منبع (برای ویژگی‌های value-map)
 SRC = {
     "مناسب برای": "جنسیت", "رنگ صفحه": "رنگ صفحه", "شکل قاب": "شکل قاب",
@@ -128,7 +210,13 @@ def rule_features(specs):
     return _SEP.join(out)
 
 
-def norm_color(v):
+def norm_color(v, attr="رنگ صفحه"):
+    """رنگ‌ها: فقط رنگ‌هایی که واقعاً ترمِ همان اتریبیوت روی سایت‌اند.
+
+    قاعدهٔ مالک — رنگی که ۱۰۰٪ قابلِ استناد نیست خالی می‌ماند. پس واژه‌ای که در واژگانِ سایت
+    نیست (تعبیرهای آزادِ منبع مثلِ «سربی»، «آنتیک»، ترکیب‌های مبهم) دور ریخته می‌شود، نه اینکه
+    ترمِ تازه بسازد. «ترکیب چند رنگ» هم مثلِ قبل کلاً خالی است.
+    """
     v = _norm(v)
     if not v or "ترکیب چند رنگ" in v:
         return ""
@@ -138,7 +226,7 @@ def norm_color(v):
         if not p:
             continue
         p = _COLOR_MAP.get(p, p)
-        if p not in out:
+        if p not in out and allowed(attr, p):
             out.append(p)
     return _SEP.join(out)
 
@@ -149,18 +237,24 @@ def _mapv(site_attr, specs):
     raw = _norm(specs.get(src, "")) if src else ""
     if not raw:
         return ""
+    # اصلاحِ صریحِ اپراتور روی همین مقدارِ خام، بر هر نگاشتِ یادگرفته‌شده‌ای مقدم است
+    fixed = _learned(site_attr, raw)
+    if fixed:
+        return fixed
     vmap = VALUE_MAPS.get(site_attr, {})
     if not vmap:
-        return raw  # نگاشتی نیست → خام (اپراتور بازبینی می‌کند)
+        # نگاشتی برای این اتریبیوت نداریم. مقدارِ خامِ منبع را عیناً نمی‌نشانیم — قاعدهٔ مالک:
+        # چیزی که ۱۰۰٪ قابلِ استناد نیست خالی بماند. (فقط اگر اتفاقاً خودش ترمِ مجازِ سایت باشد.)
+        return raw if allowed(site_attr, raw) else ""
     parts = []
     for p in re.split(r"[/،]", raw):
         p = _norm(p)
         if not p:
             continue
         term = vmap.get(p, "")
-        if term and term not in parts:
+        if term and term not in parts and allowed(site_attr, term):
             parts.append(term)
-    return _SEP.join(parts) if parts else ("" )  # ناموجود در نگاشت → خالی (بازبینیِ اپراتور)
+    return _SEP.join(parts) if parts else ""   # ناموجود در نگاشت → خالی (بازبینیِ اپراتور)
 
 
 def _size(specs, key, unit="mm"):
@@ -196,13 +290,13 @@ def map_product(d: dict, brand: str) -> "OrderedDict":
     row["مناسب برای"] = _mapv("مناسب برای", sp)
     row["استایل"] = rule_style(sp)
     row["طرح صفحه"] = rule_tarh(sp)
-    row["رنگ صفحه"] = norm_color(sp.get("رنگ صفحه", ""))
+    row["رنگ صفحه"] = norm_color(sp.get("رنگ صفحه", ""), "رنگ صفحه")
     row["شکل قاب"] = _mapv("شکل قاب", sp)
     row["میزان ضدآبی"] = _mapv("میزان ضدآبی", sp)
     row["جنس بکارگرفته"] = _mapv("جنس بکارگرفته", sp)
     row["امکانات دیگر"] = rule_features(sp)
-    row["رنگ بند"] = norm_color(sp.get("رنگ بند", ""))
-    row["رنگ قاب"] = norm_color(sp.get("رنگ قاب", ""))
+    row["رنگ بند"] = norm_color(sp.get("رنگ بند", ""), "رنگ بند")
+    row["رنگ قاب"] = norm_color(sp.get("رنگ قاب", ""), "رنگ قاب")
     row["نوع موتور"] = _mapv("نوع موتور", sp)
     row["نوع شیشه"] = _mapv("نوع شیشه", sp)
     row["طرح بند"] = _mapv("طرح بند", sp)
@@ -218,4 +312,22 @@ def map_product(d: dict, brand: str) -> "OrderedDict":
     row["ارتفاع قاب"] = _size(sp, "ارتفاع قاب")
     row["عرض بند"] = _size(sp, "عرض بند")
     row["وزن ساعت"] = _weight(sp)
+    return _apply_overrides(row, brand)
+
+
+def _apply_overrides(row: "OrderedDict", brand: str) -> "OrderedDict":
+    """اصلاحاتِ یادگرفته‌شده را روی سطر می‌نشاند.
+
+    ترتیب مهم است:
+      • ثابتِ برند فقط جای خالی را پر می‌کند — هرگز مقداری را که از خودِ محصول درآمده عوض نمی‌کند،
+        وگرنه یک ثابتِ برند می‌تواند دادهٔ واقعیِ محصول را بپوشاند.
+      • اصلاحِ تک‌محصولی همیشه برنده است، چون نظرِ صریحِ اپراتور دربارهٔ همان محصول است.
+    """
+    for attr, rec in (OVERRIDES.get("brand_const", {}).get(_norm(brand), {}) or {}).items():
+        if attr in row and not _norm(row.get(attr)):
+            row[attr] = rec.get("value", "")
+    ref = _norm(row.get("رفرانس")).upper()
+    for attr, rec in (OVERRIDES.get("per_ref", {}).get(ref, {}) or {}).items():
+        if attr in row:
+            row[attr] = rec.get("value", "")
     return row

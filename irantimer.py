@@ -42,6 +42,55 @@ def _get(url: str, tries: int = 3) -> str:
     raise last
 
 
+_BRAND_LINK_RE = re.compile(
+    r'<a[^>]+href="[^"]*?/Fa-Products-1-0-0-(\d+)/([a-z0-9\-]+)"[^>]*>(.*?)</a>', re.S)
+_ALT_RE = re.compile(r'alt="([^"]*)"')
+BRANDS_PAGE = "/ProductsBrand.aspx?Group=1"
+
+
+def list_brands() -> list[dict]:
+    """کاتالوگِ کاملِ برندهای irantimer از صفحهٔ رسمیِ برندها → [{id, slug, name}].
+
+    ⚠️ نامِ فارسی در `alt`ِ تصویرِ داخلِ لینک است، نه در متنِ لینک (لینک فقط یک <img> دارد).
+    نسخهٔ اولِ این استخراج متنِ لینک را می‌خواند و چون خالی بود به متنِ منوی اطراف می‌افتاد —
+    برای همین نام‌هایی مثلِ «لیست محصولات» و «بر اساس ویژگی‌ها» در کاتالوگِ قدیمی نشسته بود.
+    """
+    h = _get(BASE + BRANDS_PAGE)
+    out: dict[str, dict] = {}
+    for bid, slug, inner in _BRAND_LINK_RE.findall(h):
+        m = _ALT_RE.search(inner)
+        name = html.unescape(m.group(1)).strip() if m else ""
+        if not name:
+            name = _strip(inner)
+        # اولین دیدنِ هر id برنده است؛ اگر نامِ بعدی بهتر بود (قبلی خالی) جایگزین می‌شود
+        if bid not in out or (not out[bid]["name"] and name):
+            out[bid] = {"id": int(bid), "slug": slug, "name": name}
+    return sorted(out.values(), key=lambda b: b["name"] or b["slug"])
+
+
+_H1_RE = re.compile(r'<h1 property="name">(.*?)</h1>', re.S)
+_TOTAL_RE = re.compile(r'<span class="TotalItemFound">\s*(\d+)\s*</span>')
+_LEAD_RE = re.compile(r"^\s*ساعت\s+(?:مچی\s+)?")
+
+
+def brand_info(brand_id: int, group: int = 1) -> dict:
+    """یک fetch از صفحهٔ لیستِ برند → {id, name, title, total}.
+
+    این مطمئن‌ترین منبعِ نامِ فارسی است: <h1 property="name">ساعت مچی سیکو SEIKO</h1>.
+    «TotalItemFound» هم تعدادِ کلِ محصولاتِ آن برند را می‌دهد، بدونِ ورق‌زدنِ صفحات.
+    """
+    url = f"{BASE}/ProductsList.aspx?Luxury=0&Brand={brand_id}&Group={group}&page=1"
+    h = _get(url)
+    m = _H1_RE.search(h)
+    title = _strip(m.group(1)) if m else ""
+    # «ساعت مچی سیکو SEIKO» → «سیکو»: پیشوندِ ثابت و دنبالهٔ لاتین را برمی‌داریم
+    name = _LEAD_RE.sub("", title)
+    name = re.sub(r"\s*[A-Za-z][A-Za-z0-9 .&'\-]*$", "", name).strip()
+    t = _TOTAL_RE.search(h)
+    return {"id": int(brand_id), "name": name, "title": title,
+            "total": int(t.group(1)) if t else 0}
+
+
 def _strip(s: str) -> str:
     """متنِ تمیزِ تک‌خطی از HTML (تولتیپ حذف)."""
     s = re.sub(r'<span class="TooltipIcon">.*?</span>', "", s, flags=re.S)
@@ -136,7 +185,7 @@ def parse_detail_html(pid: str, h: str) -> dict:
     # موجودی: بلوکِ IT2-OutOfStock که display:none نباشد = ناموجود
     oos = bool(re.search(r'IT2-OutOfStock"(?![^>]*display:\s*none)', h))
     img = None
-    mimg = re.search(r'(https://www\.competitor-catalog\.example/Images/Products/[^"]+\.jpg)', h)
+    mimg = re.search(r'(https://competitor-catalog.example/Images/Products/[^"]+\.jpg)', h)
     if mimg:
         img = mimg.group(1)
     return {"id": pid, "ref": ref, "title": title, "price_toman": price,
