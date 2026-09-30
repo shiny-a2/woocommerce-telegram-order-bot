@@ -7,3 +7,5 @@ Repeated submissions, concurrent work and partial failures preserve product and 
 Validation included actual Windows process/SQLite tests, real HTTP image handoff, a separate WordPress/WooCommerce database, and a real public-source-to-draft integration with connection failure and restart recovery. Desktop operator acceptance and a production-host reboot are not claimed as completed tests.
 
 Private source, customer data, credentials, server addresses and operational evidence remain private. This update is a sanitized engineering summary, not a production source mirror.
+
+Live verification follow-up: bound discovery batches so subsequent processing can proceed promptly, and derive desktop availability from recent contact rather than a stale stored flag.
