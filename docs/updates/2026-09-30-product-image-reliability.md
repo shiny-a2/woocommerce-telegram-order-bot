@@ -9,3 +9,5 @@ Validation included actual Windows process/SQLite tests, real HTTP image handoff
 Private source, customer data, credentials, server addresses and operational evidence remain private. This update is a sanitized engineering summary, not a production source mirror.
 
 Live verification follow-up: bound discovery batches so subsequent processing can proceed promptly, and derive desktop availability from recent contact rather than a stale stored flag.
+
+Incremental processing update: prioritize products missing their featured image and process new-reference discovery after the image stages. Verified two separate operator batches through the actual local agent API, preserving waiting items and preventing duplicate returns. Photoshop remains manually triggered; owner desktop end-to-end acceptance is not asserted.
