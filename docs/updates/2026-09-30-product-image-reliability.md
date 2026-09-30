@@ -13,3 +13,5 @@ Live verification follow-up: bound discovery batches so subsequent processing ca
 Incremental processing update: prioritize products missing their featured image and process new-reference discovery after the image stages. Verified two separate operator batches through the actual local agent API, preserving waiting items and preventing duplicate returns. Photoshop remains manually triggered; owner desktop end-to-end acceptance is not asserted.
 
 Operator Excel selections now precede missing-featured products and gallery completion. New reference-source sites receive separate editable mapping notebooks; reviewed, approved corrections apply only to that site. Repeat submissions reuse product and image jobs.
+
+Hanowa source update: validated exact model references against a public manufacturer and retailer source, with bounded requests and full image checks before desktop handoff. Product data still goes through the existing review and draft-approval process.
