@@ -5,3 +5,5 @@ The product image pipeline now gives the Windows editing agent filenames it can 
 Historical blocked items were checked against their recorded file hashes and resumed using the same product and job identity. The manual Photoshop approval step remains in place. The change was validated with agent/API integration tests and live handoff receipts.
 
 The configured source domains were also audited against live responses. Blocked sites and missing exact matches remain visible for operator review; connectivity alone is not treated as a verified product image.
+
+The health view now flags an interrupted Windows agent heartbeat within minutes, so queued files are not shown as actively transferring when the editing computer stops polling.
