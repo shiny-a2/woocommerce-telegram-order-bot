@@ -1,5 +1,7 @@
-# Image agent 1.3.2: finished images in brand folders
+# Image agent 1.3.3: finished images in brand folders
 
 The Windows image agent now finds Photoshop output in brand and raw subfolders when the owner runs the existing send action. This fixes a case where prepared images remained unsent because only the top-level output folder was scanned.
 
 The update keeps product matching and duplicate safeguards in place and reduces repeated folder scans during large batches. Integration tests covered nested output folders and ambiguous duplicate filenames. Installation and live delivery on the owner's PC are still pending verification.
+
+Version 1.3.3 keeps safe products moving when a different product has duplicate filenames in two folders. The ambiguous files remain queued for review and are reported at the end of the batch.
