@@ -26,7 +26,6 @@ follow-up action attributed to the agent who took it.
 - **Jalali (Shamsi) calendar** — order dates and every report range use the Persian calendar.
 
 ### Admin dashboard (inline keyboard)
-- **Private numeric-ID access** — management reports and exports are gated by an explicit Telegram user-ID allowlist; usernames cannot grant access, and a newly authorized administrator must start the private bot once before Telegram permits file delivery.
 - **Quick sales** — today / this week / this month / this year.
 - **Month picker** — per-gateway revenue for any Shamsi month, with totals and percentage shares.
 - **Management reports** — executive overview, multi-month trend (with bar charts), key stats (AOV, abandonment rate), top customers, top products, province breakdown, payment-gateway success/failure performance, and pending fulfillment.
