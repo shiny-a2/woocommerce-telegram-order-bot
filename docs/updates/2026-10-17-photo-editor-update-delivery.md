@@ -5,5 +5,8 @@ package over its existing authenticated connection. The download includes an
 integrity digest and does not install or run the editor automatically, keeping
 the owner's visual approval step intact.
 
+A newer diagnostic candidate can be downloaded alongside the previous package.
+The available versions are fixed, and requesting an unknown version fails.
+
 HTTP integration tests cover access control and package integrity. Installation
 and rendered-image quality on the owner's computer still need live verification.
