@@ -16,3 +16,8 @@ different process kept the old watchdog check satisfied. The health check now
 tracks the bot itself. Headerless image workbooks can safely use either
 reference/brand or brand/reference order; existing items retain their queue
 identity when the same file is submitted again.
+
+The desktop photo agent can also label manually saved source photos from a
+unique, verified product reference so the batch editor selects that product's
+brand template. An ambiguous reference remains unlabelled, and this label
+does not bypass product matching or the owner's send approval.
