@@ -7,3 +7,5 @@ Two specification-source priorities were corrected only after live reference che
 Source lists alone do not establish end-to-end image processing. Brands without a verified specification source remain queued for review rather than being published with guessed data.
 
 A retailer-specific specification layout is now supported through a narrowly scoped parser and a deterministic model URL. Two live references returned exact matches and structured specifications; image discovery for this brand remains a separate task.
+
+The scheduled worker now keeps each background image-search batch smaller so a newly submitted spreadsheet reaches the catalog phase sooner, while preserving the established source order and retry states.
