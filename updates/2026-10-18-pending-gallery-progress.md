@@ -6,6 +6,8 @@ the batch now holds 265 validated raw images. Three entries remain short of
 the three-view target because available candidates were too small or repeated
 the same angle.
 
-The workflow keeps review approval ahead of Windows editing and publishing.
-The current scheduled worker alternates data and image stages; it does not
+At the time of this report, Windows editing waited for workbook approval.
+The later [editing-during-review update](2026-10-18-catalog-editing-during-review.md)
+removes that wait while retaining approval before storefront attachment and publication.
+The current scheduled worker alternates data and image discovery stages; it does not
 scrape both stages simultaneously within a single worker run.
