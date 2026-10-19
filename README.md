@@ -56,6 +56,7 @@ follow-up action attributed to the agent who took it.
 - **Per-agent activity** — the manager can factor each team member's CRM activity into the daily evaluation.
 
 ### Instagram analytics (optional companion)
+- **Topic-based content workspace** — managers can assign separate Telegram forum topics to caption drafts, post/story scenarios, a review-only weekly content plan, insights, competitor reports and a future CRM workspace. The weekly Instagram review can appear in its designated reports topic. Drafts are never published automatically.
 - **Growth & engagement summary** — when a read-only insights companion is configured, `/igreport` returns reach, saves, engagement and audience signals to guide content decisions. The bot only *reads* a report endpoint; it never touches the Instagram session.
 
 ## Architecture
