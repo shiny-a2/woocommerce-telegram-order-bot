@@ -49,6 +49,7 @@ follow-up action attributed to the agent who took it.
 - **Learns from the manager** — when an admin replies to any of the bot's messages, the reply is interpreted as a standing directive, a task edit, or a correction, then applied and prioritised in future evaluations.
 - **Role-based auto-assignment** — admins describe each person's responsibilities, and issues are routed to the right owner automatically.
 - **Gentle crawler** — an anti-block scan of the store, CRM and engagement signals surfaces real problems (out-of-stock, stale leads, weakening engagement) and turns them into assigned tasks, on demand or on a daily schedule.
+- **Paired catalog sync** — when two matching watches form a set, the scheduled supplier update derives its price and sellable quantity from both members and lists incomplete pairs for review.
 - **Self-check** — `/health` reports the manager's own metrics (task-completion rate, score trend, recurring carry-over); `/setup` is a per-person onboarding checklist.
 
 ### CRM & customer cards

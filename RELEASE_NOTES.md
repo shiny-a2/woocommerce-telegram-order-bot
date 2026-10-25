@@ -1,5 +1,9 @@
 # Public release notes
 
+## 2026-10-25 — Pair-watch catalog sync
+
+The daily supplier sync now recognizes a two-watch set by its two exact references. It updates the individual watches first, then derives the set's displayed price from their combined valid prices and its sellable quantity from the lower available quantity. An incomplete or ambiguous pair stays out of automatic pricing and appears in a separate review sheet. If either member update fails, the dependent set update is withheld. The production catalog was checked without customer transactions; the guarded reconciliation completed with no write or verification errors.
+
 ## 2026-10-19 — Supplier sync control
 
 The administrator-only Telegram command for a supplier catalog feed now shows its actual status and offers explicit on/off controls in private chat. The switch coordinates the existing feed reader and scheduled catalog update, helping staff avoid a misleading menu item that previously did nothing. The feed remains off until an authorized administrator turns it on.

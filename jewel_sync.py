@@ -1,4 +1,6 @@
-"""سینکِ jeweltime → فروشگاه: آینهٔ «موجود/ناموجود + تعدادِ عددی» برای برندهای مبدأ.
+"""Illustrative archived sample; see RELEASE_NOTES.md for current deployed behavior.
+
+سینکِ jeweltime → فروشگاه: آینهٔ «موجود/ناموجود + تعدادِ عددی» برای برندهای مبدأ.
 
 - مبدأ: ووکامرسِ jeweltime روی همان سرورِ cPanel (DB `source_products_db`،
   پیشوند `wp_`). خواندن فقط با SSH→mysql (read-only، SELECT).
