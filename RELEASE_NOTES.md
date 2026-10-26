@@ -1,5 +1,20 @@
 # Public release notes
 
+## 2026-10-26 — Shared watch retailer brand matching
+
+The catalog engine now accepts a retailer's expanded brand label only when
+the requested brand is visible on the exact product page. This restored tested
+image and specification discovery for two watch brands while leaving source
+priorities under administrator control. The retailer's product sitemap is
+cached across its image and data routes to avoid repeating a large catalog
+scan. Two other administrator-selected stores already worked through the
+generic connector and required no duplicate scraper.
+
+Live reference checks and focused regression tests passed. Missing products
+and existing products needing images entered the existing review workflow;
+complete galleries were skipped. The generated review workbook and downstream
+publication are still pending for the newly queued items.
+
 ## 2026-10-26 — Administrator-selected retailer coverage
 
 The image and product-data engine now recognizes more retailer layouts already
