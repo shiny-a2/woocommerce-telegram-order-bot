@@ -1,5 +1,16 @@
 # Public release notes
 
+## 2026-10-27 — Aztorin image route prepared
+
+An image connector is ready for an administrator-selected watch brand whose
+official catalog has collection pages but no usable product sitemap. It
+matches the exact model on a collection card and product page, then keeps
+only full-size gallery images belonging to that product. Three live models
+from separate collections returned exact matches and valid first images; one
+model's main and gallery images both passed file checks. Focused regression
+tests passed. This connector has not yet been installed on the production
+worker. Product data, Photoshop processing and publication were not tested.
+
 ## 2026-10-27 — Official watch-gallery route
 
 The image engine can use an official watch catalog's public product search
