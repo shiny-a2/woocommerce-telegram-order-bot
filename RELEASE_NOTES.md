@@ -2,7 +2,7 @@
 
 ## 2026-10-26 — First priority watch-source batch
 
-A reviewed official Omax source connector is prepared for product image and specification discovery. It accepts specifications only when the page's model matches the requested reference, reducing the risk of attaching another model's details. A live sample from the bot host returned an exact image match and detailed specifications; a separate regression check rejected mismatched model details. The current catalog covers only part of the historical Omax request list. Sampled older Romanson references and the Louis Frrier catalog did not yet yield a reliable live source, so no unverified fallback was added. Production source settings and post-deployment behavior remain unverified.
+A reviewed official Omax source connector now supports product image and specification discovery. It accepts specifications only when the page's model matches the requested reference, reducing the risk of attaching another model's details. Two live models returned exact image matches and detailed specifications after deployment; the service health check passed. The current catalog covers only part of the historical Omax request list. Sampled older Romanson references and the Louis Frrier catalog did not yet yield a reliable live source, so no unverified fallback was added. Product creation, image upload, and publication were outside this source validation.
 
 ## 2026-10-25 — Pair-watch catalog sync
 
