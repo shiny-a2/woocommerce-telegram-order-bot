@@ -1,5 +1,14 @@
 # Public release notes
 
+## 2026-10-27 — Source audit follow-up
+
+Read-only checks of several administrator-selected fallback sites found an
+expired certificate, unavailable product catalog endpoints, and a current
+catalog unrelated to watches. The audit records which routes are unverified
+so they are not described as working image or data sources. Existing source
+priorities and product records were left untouched; a prepared official image
+connector still awaits production installation.
+
 ## 2026-10-27 — Aztorin image route prepared
 
 An image connector is ready for an administrator-selected watch brand whose
