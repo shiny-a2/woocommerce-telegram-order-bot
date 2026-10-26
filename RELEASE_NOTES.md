@@ -1,5 +1,19 @@
 # Public release notes
 
+## 2026-10-26 — Additional configured watch images
+
+An administrator-selected retailer now participates in image discovery for
+the configured watch brand. Its product pages use a different URL pattern and
+its image filenames are opaque, so matching requires the full model on the
+exact product page and the visible brand name. Accessory paths are excluded.
+A live sample supplied a decoded high-resolution image; focused regression
+tests and the restarted service health check passed.
+
+The existing intake queued models absent from the storefront and routed
+incomplete existing products to image work without duplicating a job already
+in progress. Human review, Photoshop processing, attachment and publication
+remain pending for the newly queued items.
+
 ## 2026-10-26 — Exact watch versus accessory matching
 
 An administrator-selected official watch catalog now supplies tested images
