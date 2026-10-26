@@ -12,7 +12,7 @@ Live samples for the configured brands returned exact product facts and
 validated images where the retailer supplied enough resolution. Some sampled
 images were too small and remain subject to the existing source fallback.
 The first retailer's public listing does not cover every older model, and
-three other configured domains remain inaccessible to the bot's normal
+four other configured domains remain inaccessible to the bot's normal
 requests. Focused regression tests passed. This change is prepared in source
 control and has not been deployed to production.
 
