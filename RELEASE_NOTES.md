@@ -1,5 +1,21 @@
 # Public release notes
 
+## 2026-10-26 — Exact watch versus accessory matching
+
+An administrator-selected official watch catalog now supplies tested images
+and product specifications through its existing brand-source setting. Its
+product pages and accessory pages can carry the same base model code, so the
+source route excludes accessory paths and requires the complete model suffix.
+It also reads labelled facts only from the exact product description. Live
+checks covered a base model and a color variant; connector and transport
+regression tests passed.
+
+Missing references and existing products needing images entered the established
+Excel review and image workflows after a database backup. Complete galleries
+were skipped. The service restarted successfully; review, image processing
+and publication for these queued products are still pending. Other configured
+retailers remain under review and are not claimed as fully supported here.
+
 ## 2026-10-26 — Shared watch retailer brand matching
 
 The catalog engine now accepts a retailer's expanded brand label only when
