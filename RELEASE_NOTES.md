@@ -1,5 +1,20 @@
 # Public release notes
 
+## 2026-10-26 — Shared retailer brand matching
+
+A watch retailer selected in the administrator's source settings now matches
+one brand shown in Latin on product pages to its Persian catalog name. The
+alias applies only to that brand, while its shared sitemap index serves both
+image and product-data searches. Live samples for two brands returned exact
+model pages, decoded images and visible specifications; focused connector and
+transport tests passed.
+
+The established review intake accepted missing models and routed existing
+products needing images into the image queue after a database backup. Three
+ambiguous storefront matches were held for identity review. The restarted
+service reported a current worker; Excel approval, image processing and
+publication are still pending for these items.
+
 ## 2026-10-26 — Complete shared multi-brand catalog scan
 
 Another retailer already configured for several watch brands now uses one
