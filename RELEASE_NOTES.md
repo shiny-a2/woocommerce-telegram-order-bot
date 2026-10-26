@@ -1,5 +1,22 @@
 # Public release notes
 
+## 2026-10-26 — Administrator-selected retailer coverage
+
+The image and product-data engine now recognizes more retailer layouts already
+selected in the brand-source settings. Tested routes include two watch stores
+with WooCommerce catalog endpoints and four stores with different product URL
+or image patterns. Model matching and image selection stay tied to the exact
+reference; a shared retailer's brand hint is scoped to the intended brand.
+Existing source priorities and the human Excel approval step are preserved.
+
+Live product lookups and focused regression tests passed, and the restarted
+service health check reported a running worker. References absent from the
+storefront entered the existing review intake, while products with sufficient
+images were skipped. The review workbook, Photoshop processing, final image
+attachment and publication are still pending for those newly queued items.
+Some configured retailers remain unverified, so this release does not claim
+complete coverage of every brand-source setting.
+
 ## 2026-10-26 — Additional watch-source routes prepared
 
 The source update added a supplemental Omax catalog route and a Louis Frrier retailer route. Both were checked against exact model references and real product images from the bot host. The Omax route uses a shared catalog cache for image and data lookups; the Louis Frrier route handles the retailer's compact model search and relative product links. Image selection rejects filenames for neighboring models on these routes, and duplicated hidden specification fields are excluded from the Louis Frrier data. Focused regression tests and production source lookups passed. After a database backup, the existing Excel intake queued the missing references without duplicate intake keys; a scheduled worker tick produced review workbooks while keeping product creation behind explicit approval. The image service remained healthy. The current Romanson retailer catalog did not cover the sampled older models, so no replacement route was registered. Product creation, image upload, and publication remain unverified for these new routes.
