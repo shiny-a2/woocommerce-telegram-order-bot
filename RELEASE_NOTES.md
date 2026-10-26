@@ -1,5 +1,22 @@
 # Public release notes
 
+## 2026-10-26 — Shared catalog for three configured brands
+
+An Iranian retailer already selected in the administrator settings now uses
+its complete product sitemap for three watch brands. The public product
+search endpoint did not permit the bot's query, so the source uses a bounded
+catalog scan shared across the brand and image/data routes. A model-specific
+image filter excludes an unrelated gallery file. Live checks found exact
+models, decoded product photos and visible specifications for sampled items;
+focused connector and transport tests passed.
+
+The existing review intake accepted products absent from the storefront and
+created image work for incomplete existing products. One reference with an
+ambiguous storefront lookup was held for manual identity review instead of
+creating a duplicate. Reused jobs kept their earlier review-batch assignment.
+The service remained healthy; review, Photoshop work and publication are
+pending for the newly queued items.
+
 ## 2026-10-26 — Additional configured watch images
 
 An administrator-selected retailer now participates in image discovery for
