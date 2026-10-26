@@ -1,14 +1,15 @@
 # Public release notes
 
-## 2026-10-27 — Official watch-gallery route prepared
+## 2026-10-27 — Official watch-gallery route
 
 The image engine can use an official watch catalog's public product search
 when its product titles show color names rather than model codes. The route
 requires an exact SKU and keeps only gallery files bearing that model code.
 It also removes repeated image URLs before download. Two live model searches
 returned matching images; one gallery's unrelated packaging photo was
-excluded. Focused tests passed. This source update is prepared in code and
-has not been deployed; product-data extraction was not verified for it.
+excluded. Focused tests passed. After a backed-up deployment, both models
+returned two valid images each through the installed route and the worker
+remained healthy. Product-data extraction was not verified for this source.
 
 ## 2026-10-27 — Two administrator-selected source routes
 
