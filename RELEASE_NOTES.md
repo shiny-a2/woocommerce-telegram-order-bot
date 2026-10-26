@@ -1,6 +1,6 @@
 # Public release notes
 
-## 2026-10-27 — Two administrator-selected source routes prepared
+## 2026-10-27 — Two administrator-selected source routes
 
 An adapter now reads a retailer's visible brand listing and exact product
 card when its sitemap cannot be used. Gallery images are tied to that card's
@@ -13,8 +13,10 @@ validated images where the retailer supplied enough resolution. Some sampled
 images were too small and remain subject to the existing source fallback.
 The first retailer's public listing does not cover every older model, and
 four other configured domains remain inaccessible to the bot's normal
-requests. Focused regression tests passed. This change is prepared in source
-control and has not been deployed to production.
+requests. Focused regression tests passed. After a backed-up deployment, live
+checks of both installed routes found exact product facts and qualifying
+images, and the existing worker was running. Historical catalog coverage,
+manual approval and publication remain separate verification steps.
 
 ## 2026-10-26 — Shared retailer brand matching
 
