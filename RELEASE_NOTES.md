@@ -1,5 +1,20 @@
 # Public release notes
 
+## 2026-10-26 — Complete shared multi-brand catalog scan
+
+Another retailer already configured for several watch brands now uses one
+complete product sitemap cache across those brand and data routes. Its public
+search endpoint was unavailable to the bot, and the default catalog deadline
+ended before all product maps loaded. The bounded route now finishes that
+scan before searching exact model references. Live data checks for three
+brands returned detailed product facts, and focused connector and transport
+tests passed.
+
+The established intake queued missing products and reused existing image
+jobs, including references already waiting in earlier review batches. The
+service was running after deployment. Excel approval, image processing and
+publication remain separate pending steps.
+
 ## 2026-10-26 — Shared catalog for three configured brands
 
 An Iranian retailer already selected in the administrator settings now uses
