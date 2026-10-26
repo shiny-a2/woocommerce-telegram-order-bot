@@ -1,5 +1,21 @@
 # Public release notes
 
+## 2026-10-27 — Two administrator-selected source routes prepared
+
+An adapter now reads a retailer's visible brand listing and exact product
+card when its sitemap cannot be used. Gallery images are tied to that card's
+internal product identifier, and specifications come from its own labelled
+panel. A second retailer uses the existing public product API with a visible
+brand check, avoiding a slow generic catalog scan.
+
+Live samples for the configured brands returned exact product facts and
+validated images where the retailer supplied enough resolution. Some sampled
+images were too small and remain subject to the existing source fallback.
+The first retailer's public listing does not cover every older model, and
+three other configured domains remain inaccessible to the bot's normal
+requests. Focused regression tests passed. This change is prepared in source
+control and has not been deployed to production.
+
 ## 2026-10-26 — Shared retailer brand matching
 
 A watch retailer selected in the administrator's source settings now matches
