@@ -1,5 +1,9 @@
 # Public release notes
 
+## 2026-10-26 — Additional watch-source routes prepared
+
+The next source update adds a supplemental Omax catalog route and a Louis Frrier retailer route. Both were checked against exact model references and real product images from the bot host. The Omax route uses a shared catalog cache for image and data lookups; the Louis Frrier route handles the retailer's compact model search and relative product links. Image selection now rejects filenames for neighboring models on these routes, and duplicated hidden specification fields are excluded from the Louis Frrier data. Focused regression tests passed. This update is prepared in source control and has not yet been deployed. The current Romanson retailer catalog did not cover the sampled older models, so no replacement route was registered. Product creation, image upload, and publication remain unverified for these new routes.
+
 ## 2026-10-26 — First priority watch-source batch
 
 A reviewed official Omax source connector now supports product image and specification discovery. It accepts specifications only when the page's model matches the requested reference, reducing the risk of attaching another model's details. Two live models returned exact image matches and detailed specifications after deployment; the service health check passed. The current catalog covers only part of the historical Omax request list. Sampled older Romanson references and the Louis Frrier catalog did not yet yield a reliable live source, so no unverified fallback was added. Product creation, image upload, and publication were outside this source validation.
