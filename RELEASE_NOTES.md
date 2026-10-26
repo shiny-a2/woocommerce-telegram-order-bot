@@ -1,5 +1,9 @@
 # Public release notes
 
+## 2026-10-26 — First priority watch-source batch
+
+A reviewed official Omax source connector is prepared for product image and specification discovery. It accepts specifications only when the page's model matches the requested reference, reducing the risk of attaching another model's details. A live sample from the bot host returned an exact image match and detailed specifications; a separate regression check rejected mismatched model details. The current catalog covers only part of the historical Omax request list. Sampled older Romanson references and the Louis Frrier catalog did not yet yield a reliable live source, so no unverified fallback was added. Production source settings and post-deployment behavior remain unverified.
+
 ## 2026-10-25 — Pair-watch catalog sync
 
 The daily supplier sync now recognizes a two-watch set by its two exact references. It updates the individual watches first, then derives the set's displayed price from their combined valid prices and its sellable quantity from the lower available quantity. An incomplete or ambiguous pair stays out of automatic pricing and appears in a separate review sheet. If either member update fails, the dependent set update is withheld. The production catalog was checked without customer transactions; the guarded reconciliation completed with no write or verification errors.
