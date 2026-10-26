@@ -1,5 +1,15 @@
 # Public release notes
 
+## 2026-10-27 — Official watch-gallery route prepared
+
+The image engine can use an official watch catalog's public product search
+when its product titles show color names rather than model codes. The route
+requires an exact SKU and keeps only gallery files bearing that model code.
+It also removes repeated image URLs before download. Two live model searches
+returned matching images; one gallery's unrelated packaging photo was
+excluded. Focused tests passed. This source update is prepared in code and
+has not been deployed; product-data extraction was not verified for it.
+
 ## 2026-10-27 — Two administrator-selected source routes
 
 An adapter now reads a retailer's visible brand listing and exact product
