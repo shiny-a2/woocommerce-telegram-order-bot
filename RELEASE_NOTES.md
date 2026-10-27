@@ -1,5 +1,15 @@
 # Public release notes
 
+## 2026-10-27 — Additional official watch-image route prepared
+
+A prepared connector reads one official watch site's product record and
+accepts images only when its model identifier and brand match the requested
+watch. It keeps the product's own gallery and excludes unrelated page images.
+Two live models returned valid image files, while a model absent from that
+regional catalog was correctly left unresolved. Focused tests passed. This
+route has not been installed or added to administrator source priorities;
+existing image jobs and publication states remain unchanged.
+
 ## 2026-10-27 — Source audit follow-up
 
 Read-only checks of several administrator-selected fallback sites found an
