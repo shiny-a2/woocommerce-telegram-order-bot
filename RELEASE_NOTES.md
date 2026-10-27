@@ -196,3 +196,9 @@ The internal manager now supports dedicated Telegram forum topics for caption an
 If the optional Instagram analytics source is offline, the bot labels its last saved snapshot with its date and does not present old competitor figures as current performance.
 
 The designated reports topic can also show today's staff performance and the monthly trend. Its daily staff summary is delivered there automatically after binding; private owner financial details remain outside the group.
+
+## 2026-10-27 — Catalog review queue fix prepared
+
+A large product workbook can remain unsent when a few reference sites fail repeatedly while other models are still being researched. The prepared catalog update gives due retries a place in each processing cycle and, after three unsuccessful source searches, keeps the affected model as an editable row in the original combined workbook. Staff can complete that row's specifications and return the same workbook for the existing approval step. Draft creation and publication remain subject to their separate checks.
+
+Thirty catalog tests passed with a temporary database, including retry fairness, a combined workbook with a manual row, and the absence of product creation before approval. The update is published to the private development branch; production deployment and live Telegram delivery are still pending.
