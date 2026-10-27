@@ -1,14 +1,17 @@
 # Public release notes
 
-## 2026-10-27 — Additional official watch-image route prepared
+## 2026-10-27 — Additional official watch-image route deployed
 
-A prepared connector reads one official watch site's product record and
+The connector reads one official watch site's product record and
 accepts images only when its model identifier and brand match the requested
 watch. It keeps the product's own gallery and excludes unrelated page images.
 Two live models returned valid image files, while a model absent from that
-regional catalog was correctly left unresolved. Focused tests passed. This
-route has not been installed or added to administrator source priorities;
-existing image jobs and publication states remain unchanged.
+regional catalog was correctly left unresolved. Focused tests passed. After
+a backed-up deployment, the administrator's last image fallback for this
+brand was changed to the reviewed official route. Two existing review jobs
+then found exact product images without creating new jobs; one raw file had
+downloaded at the first post-requeue check. Photoshop processing, storefront
+attachment and publication are still pending.
 
 ## 2026-10-27 — Source audit follow-up
 
@@ -16,19 +19,21 @@ Read-only checks of several administrator-selected fallback sites found an
 expired certificate, unavailable product catalog endpoints, and a current
 catalog unrelated to watches. The audit records which routes are unverified
 so they are not described as working image or data sources. Existing source
-priorities and product records were left untouched; a prepared official image
-connector still awaits production installation.
+priorities and product records were left untouched during the audit. A later,
+separately approved rollout installed a reviewed official image connector.
 
-## 2026-10-27 — Aztorin image route prepared
+## 2026-10-27 — Aztorin image route deployed
 
-An image connector is ready for an administrator-selected watch brand whose
+The image connector serves an administrator-selected watch brand whose
 official catalog has collection pages but no usable product sitemap. It
 matches the exact model on a collection card and product page, then keeps
 only full-size gallery images belonging to that product. Three live models
 from separate collections returned exact matches and valid first images; one
 model's main and gallery images both passed file checks. Focused regression
-tests passed. This connector has not yet been installed on the production
-worker. Product data, Photoshop processing and publication were not tested.
+tests passed. Following a backed-up deployment, the installed worker returned
+two matching images for the sampled model and validated the first file.
+Administrator source priorities were preserved. Product data, Photoshop
+processing and publication were not tested.
 
 ## 2026-10-27 — Official watch-gallery route
 
