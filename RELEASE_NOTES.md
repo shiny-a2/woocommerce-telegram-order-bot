@@ -197,6 +197,12 @@ If the optional Instagram analytics source is offline, the bot labels its last s
 
 The designated reports topic can also show today's staff performance and the monthly trend. Its daily staff summary is delivered there automatically after binding; private owner financial details remain outside the group.
 
+## 2026-10-27 — Fair catalog discovery across brands
+
+When a large workbook contains several brands, older references from one brand could occupy every scheduled discovery slot. The catalog worker now rotates those slots across waiting brands while retaining the original order within each brand. It continues to prioritize approved drafts and due source retries.
+
+Thirty-one catalog tests passed with a temporary database. After a backed-up production deployment, the first scheduled run advanced two brands in the same cycle. A reference from the previously waiting brand produced an editable review row with specifications from its configured source. Product creation still waits for review and approval of the combined workbook; image processing and publication were not part of this validation.
+
 ## 2026-10-27 — Catalog review queue fix deployed
 
 A large product workbook can remain unsent when a few reference sites fail repeatedly while other models are still being researched. The catalog update gives due retries a place in each processing cycle and, after three unsuccessful source searches, keeps the affected model as an editable row in the original combined workbook. Staff can complete that row's specifications and return the same workbook for the existing approval step. Draft creation and publication remain subject to their separate checks.
