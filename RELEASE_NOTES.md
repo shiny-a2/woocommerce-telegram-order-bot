@@ -262,3 +262,9 @@ Thirty-two focused catalog tests passed. After a backed-up deployment, the live 
 An exact duplicate in an optional gallery image previously stopped the entire image job, even when the featured image belonged uniquely to the approved product. The worker now skips and records that gallery duplicate while retaining the strict identity check for featured images. This lets complete, approved drafts continue through media SEO, attachment and publication without reusing another product's gallery photo.
 
 Thirty-nine worker tests passed. In a backed-up production run, two previously held jobs each skipped one duplicate gallery photo, uploaded their unique featured image and remaining gallery, completed product SEO, and recorded successful publication. The scheduled worker was restored after the controlled run.
+
+## 2026-10-27 — Ready image returns get the first turn
+
+The image worker previously waited for catalog and source searches before uploading processed photos. A slow source could delay an approved product even when its edited image was already back from the desktop. The existing worker now checks ready uploads and attachments first, then runs its normal catalog and discovery work. It retains the later pass for jobs that become ready during the same run.
+
+Forty worker tests passed, including a stage-order check. The backed-up production installation matched the reviewed source hash; the running worker had a fresh heartbeat and the image API responded successfully. No additional product was published in this deployment because the remaining approved drafts still need their manually edited images returned from the desktop.
