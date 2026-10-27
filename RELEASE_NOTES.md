@@ -244,3 +244,9 @@ Thirty-two catalog tests passed. After a backed-up production deployment, an act
 A configured retailer labeled one watch brand in both Persian and English. Its pages had exact model SKUs, but the source check interpreted that label as a different brand and discarded the product data. The source profile now recognizes that retailer's reviewed label for the affected brand while retaining exact model and brand checks.
 
 Twenty-one focused tests passed. A live source check found nine previously rejected references with exact product pages and structured specifications. After a backed-up deployment, those same nine jobs produced editable review files in the existing combined intake. The source's sample image was below the configured resolution threshold, so it was not accepted as an image source. The workbook still needs operator approval; no products were created or published.
+
+## 2026-10-27 — Clean supplier photos for a watch review batch
+
+A configured image source had exact product photos, but each photo carried the same supplier logo below the watch. The image pipeline now removes that verified footer for the affected brand and rejects an unfamiliar footer for review. Other image sources keep their existing quality checks.
+
+Twenty-four focused tests passed. After a backed-up deployment, three live model matches each produced a clean, validated image saved under its existing job. The image worker and intake service were running. The product workbooks still need approval and the photos still need the normal manual editing step; this update did not create or publish products.
