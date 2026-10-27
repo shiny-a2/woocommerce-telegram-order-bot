@@ -238,3 +238,9 @@ Fifty-six focused tests passed. On the running production worker, the affected m
 When several configured reference sites were unavailable, catalog jobs reported only a generic system error. They now record the affected source domains and short failure codes while keeping the existing retries and editable manual row after repeated failures. This makes it easier to decide whether to wait or fill in the specifications in the combined workbook.
 
 Thirty-two catalog tests passed. After a backed-up production deployment, an actual retry recorded specific source failures and the existing worker and image API remained healthy. No product was approved, imported or published by this diagnostic change.
+
+## 2026-10-27 — More exact watch data recovered for review
+
+A configured retailer labeled one watch brand in both Persian and English. Its pages had exact model SKUs, but the source check interpreted that label as a different brand and discarded the product data. The source profile now recognizes that retailer's reviewed label for the affected brand while retaining exact model and brand checks.
+
+Twenty-one focused tests passed. A live source check found nine previously rejected references with exact product pages and structured specifications. After a backed-up deployment, those same nine jobs produced editable review files in the existing combined intake. The source's sample image was below the configured resolution threshold, so it was not accepted as an image source. The workbook still needs operator approval; no products were created or published.
