@@ -226,3 +226,9 @@ Fifty-three focused connector tests passed. After a backed-up deployment, a read
 The bot previously directed operators to a status command that was not registered. Authorized operators can now use that command in private chat to see the existing image pipeline dashboard. It also shows how many rows of each pending combined workbook are ready, queued, being retried or need manual specifications. This makes the reason for a delayed workbook visible without splitting the review into many files.
 
 Two focused progress tests passed. After a backed-up deployment, the running bot registered the command and rendered counts from the live queue without sending a test message. The pending workbooks still have source checks outstanding; this release did not approve data, create products or publish them.
+
+## 2026-10-27 — Recovering a watch missing from a source sitemap
+
+A configured watch retailer listed a model on its public brand collection but omitted it from the product sitemap. The catalog connector now checks that collection when the sitemap has no exact match, then verifies the individual product page. A narrowly scoped image check also accepts a small, valid compressed WebP from that reviewed source while retaining resolution and duplicate checks.
+
+Fifty-six focused tests passed. On the running production worker, the affected model gained an editable review row and one validated raw image tied to its existing job. The image API returned healthy after the backed-up deployment. Product creation, Photoshop editing and publication still require the normal review and image steps.
