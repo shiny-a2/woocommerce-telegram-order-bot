@@ -250,3 +250,9 @@ Twenty-one focused tests passed. A live source check found nine previously rejec
 A configured image source had exact product photos, but each photo carried the same supplier logo below the watch. The image pipeline now removes that verified footer for the affected brand and rejects an unfamiliar footer for review. Other image sources keep their existing quality checks.
 
 Twenty-four focused tests passed. After a backed-up deployment, three live model matches each produced a clean, validated image saved under its existing job. The image worker and intake service were running. The product workbooks still need approval and the photos still need the normal manual editing step; this update did not create or publish products.
+
+## 2026-10-27 — Image downloads follow workbook readiness
+
+Photo prefetch previously sorted new imports ahead of older products whose editable workbooks were already ready. It now gives those reviewable rows the first turn, then keeps the recent-import order within each stage. Retry timers, source checks and the operator's approval step remain in place.
+
+Thirty-two focused catalog tests passed. After a backed-up deployment, the live selector placed twelve due workbook rows ahead of unprepared references. The image service and worker were running with a healthy heartbeat. Existing jobs for two watch brands were retried through the same queue, and review rows began to appear. The remaining draft products lacked the required image and category checks, so this release did not publish any product.
