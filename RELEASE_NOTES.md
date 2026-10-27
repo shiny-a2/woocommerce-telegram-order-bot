@@ -220,3 +220,9 @@ Thirty-five connector tests passed. After a backed-up production deployment, a l
 A configured retailer's brand listing was downloaded again for every model in a large review batch. The source connector now reuses a valid list of product links for ten minutes while checking each model against its own product page. Empty listings and source failures are not cached, so a temporary problem can still be retried. This speeds repeated checks without broadening the source's catalog coverage or changing the approval workflow.
 
 Fifty-three focused connector tests passed. After a backed-up deployment, a read-only production check found 17 allowed links and read the same listing from cache on a second request. The scheduled worker and image API were running with a healthy worker. Product import, Photoshop processing and publication were not part of this source-only check.
+
+## 2026-10-27 — Combined workbook progress in the bot
+
+The bot previously directed operators to a status command that was not registered. Authorized operators can now use that command in private chat to see the existing image pipeline dashboard. It also shows how many rows of each pending combined workbook are ready, queued, being retried or need manual specifications. This makes the reason for a delayed workbook visible without splitting the review into many files.
+
+Two focused progress tests passed. After a backed-up deployment, the running bot registered the command and rendered counts from the live queue without sending a test message. The pending workbooks still have source checks outstanding; this release did not approve data, create products or publish them.
