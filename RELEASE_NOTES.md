@@ -232,3 +232,9 @@ Two focused progress tests passed. After a backed-up deployment, the running bot
 A configured watch retailer listed a model on its public brand collection but omitted it from the product sitemap. The catalog connector now checks that collection when the sitemap has no exact match, then verifies the individual product page. A narrowly scoped image check also accepts a small, valid compressed WebP from that reviewed source while retaining resolution and duplicate checks.
 
 Fifty-six focused tests passed. On the running production worker, the affected model gained an editable review row and one validated raw image tied to its existing job. The image API returned healthy after the backed-up deployment. Product creation, Photoshop editing and publication still require the normal review and image steps.
+
+## 2026-10-27 — Clearer catalog source failures
+
+When several configured reference sites were unavailable, catalog jobs reported only a generic system error. They now record the affected source domains and short failure codes while keeping the existing retries and editable manual row after repeated failures. This makes it easier to decide whether to wait or fill in the specifications in the combined workbook.
+
+Thirty-two catalog tests passed. After a backed-up production deployment, an actual retry recorded specific source failures and the existing worker and image API remained healthy. No product was approved, imported or published by this diagnostic change.
