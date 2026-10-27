@@ -268,3 +268,9 @@ Thirty-nine worker tests passed. In a backed-up production run, two previously h
 The image worker previously waited for catalog and source searches before uploading processed photos. A slow source could delay an approved product even when its edited image was already back from the desktop. The existing worker now checks ready uploads and attachments first, then runs its normal catalog and discovery work. It retains the later pass for jobs that become ready during the same run.
 
 Forty worker tests passed, including a stage-order check. The backed-up production installation matched the reviewed source hash; the running worker had a fresh heartbeat and the image API responded successfully. No additional product was published in this deployment because the remaining approved drafts still need their manually edited images returned from the desktop.
+
+## 2026-10-27 — Keep desktop photo delivery moving past filename conflicts
+
+The desktop image queue could stall when its first few jobs shared filenames with photos already delivered for earlier reviews. The service still holds those ambiguous jobs, but now scans the rest of the ready queue for safe work. This lets other approved images reach the existing manual editing workflow without risking an attachment to the wrong product.
+
+All 27 bridge integration tests passed, including the collision case. After a backed-up deployment, the live image API and worker were running and a ten-job desktop poll returned ten eligible jobs where the same poll had previously stopped at six. Separately, two approved drafts with individually reviewed featured photos completed the existing image and publication pipeline. Other drafts still await manual photo editing; the remaining filename conflicts require exact ownership review.
