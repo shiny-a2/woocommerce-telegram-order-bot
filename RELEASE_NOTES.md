@@ -274,3 +274,9 @@ Forty worker tests passed, including a stage-order check. The backed-up producti
 The desktop image queue could stall when its first few jobs shared filenames with photos already delivered for earlier reviews. The service still holds those ambiguous jobs, but now scans the rest of the ready queue for safe work. This lets other approved images reach the existing manual editing workflow without risking an attachment to the wrong product.
 
 All 27 bridge integration tests passed, including the collision case. After a backed-up deployment, the live image API and worker were running and a ten-job desktop poll returned ten eligible jobs where the same poll had previously stopped at six. Separately, two approved drafts with individually reviewed featured photos completed the existing image and publication pipeline. Other drafts still await manual photo editing; the remaining filename conflicts require exact ownership review.
+
+## 2026-10-27 — Recognize identical photos with different JPEG metadata
+
+Some approved photo jobs were held because an earlier desktop handoff and the approved product held different JPEG files, even though the visible pixels were identical. The existing reuse step now accepts that exact pixel match after verifying both files and their ownership. Different views remain held for review.
+
+Forty-eight reuse and worker tests passed. A read-only check of six live photo pairs accepted four exact matches and held two different views. After a backed-up deployment, the image worker and API were healthy. The pending products still require the operator's Photoshop output and return before publication; this update did not publish another product.
