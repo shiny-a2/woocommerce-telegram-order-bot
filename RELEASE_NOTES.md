@@ -208,3 +208,9 @@ Thirty-one catalog tests passed with a temporary database. After a backed-up pro
 A large product workbook can remain unsent when a few reference sites fail repeatedly while other models are still being researched. The catalog update gives due retries a place in each processing cycle and, after three unsuccessful source searches, keeps the affected model as an editable row in the original combined workbook. Staff can complete that row's specifications and return the same workbook for the existing approval step. Draft creation and publication remain subject to their separate checks.
 
 Thirty catalog tests passed with a temporary database, including retry fairness, a combined workbook with a manual row, and the absence of product creation before approval. The production worker resumed after a backed-up deployment, and its first run processed a due retry alongside new references. The complete workbook, Telegram delivery, and resulting product imports still await the remaining source checks and staff approval.
+
+## 2026-10-27 — Bounded cache for empty source catalogs
+
+A source with a complete but empty product sitemap was being read again for every unmatched model in a large workbook. The image and data source engine now reuses that specific empty result for five minutes. Incomplete or failed sitemap requests still trigger their normal retry path, and non-empty catalogs keep their existing cache lifetime.
+
+Thirty-five connector tests passed. After a backed-up production deployment, a live source lookup took about 39 seconds on its first read and returned immediately from cache on a second read. This confirms less repeated work for that fallback; completion of the workbook, product creation, image editing and publication remain subject to their existing steps.
