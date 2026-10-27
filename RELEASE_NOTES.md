@@ -214,3 +214,9 @@ Thirty catalog tests passed with a temporary database, including retry fairness,
 A source with a complete but empty product sitemap was being read again for every unmatched model in a large workbook. The image and data source engine now reuses that specific empty result for five minutes. Incomplete or failed sitemap requests still trigger their normal retry path, and non-empty catalogs keep their existing cache lifetime.
 
 Thirty-five connector tests passed. After a backed-up production deployment, a live source lookup took about 39 seconds on its first read and returned immediately from cache on a second read. This confirms less repeated work for that fallback; completion of the workbook, product creation, image editing and publication remain subject to their existing steps.
+
+## 2026-10-27 — Faster reference checks on a configured watch source
+
+A configured retailer's brand listing was downloaded again for every model in a large review batch. The source connector now reuses a valid list of product links for ten minutes while checking each model against its own product page. Empty listings and source failures are not cached, so a temporary problem can still be retried. This speeds repeated checks without broadening the source's catalog coverage or changing the approval workflow.
+
+Fifty-three focused connector tests passed. After a backed-up deployment, a read-only production check found 17 allowed links and read the same listing from cache on a second request. The scheduled worker and image API were running with a healthy worker. Product import, Photoshop processing and publication were not part of this source-only check.
