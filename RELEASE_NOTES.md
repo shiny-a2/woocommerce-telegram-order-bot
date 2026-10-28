@@ -296,3 +296,9 @@ All 27 bridge integration tests passed, including the collision case. After a ba
 Some approved photo jobs were held because an earlier desktop handoff and the approved product held different JPEG files, even though the visible pixels were identical. The existing reuse step now accepts that exact pixel match after verifying both files and their ownership. Different views remain held for review.
 
 Forty-eight reuse and worker tests passed. A read-only check of six live photo pairs accepted four exact matches and held two different views. After a backed-up deployment, the image worker and API were healthy. The pending products still require the operator's Photoshop output and return before publication; this update did not publish another product.
+
+## 2026-10-28 — Clear image jobs already completed on the storefront
+
+Some older image jobs still waited for desktop editing after their products had already gained a featured image, a complete gallery, and published status. The existing worker now checks the current product identity and image state before closing those jobs, while retaining incomplete galleries and missing images for the normal workflow. A temporary lookup failure leaves the job untouched.
+
+The 42-test worker suite passed. After a backed-up deployment, a live readback closed 19 previously stale jobs and retained 19 incomplete ones. No product, media item, or approval was changed by this reconciliation. New products still require the reviewed workbook and the existing manual photo workflow before publication.
