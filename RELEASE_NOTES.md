@@ -302,3 +302,9 @@ Forty-eight reuse and worker tests passed. A read-only check of six live photo p
 Some older image jobs still waited for desktop editing after their products had already gained a featured image, a complete gallery, and published status. The existing worker now checks the current product identity and image state before closing those jobs, while retaining incomplete galleries and missing images for the normal workflow. A temporary lookup failure leaves the job untouched.
 
 The 42-test worker suite passed. After a backed-up deployment, a live readback closed 19 previously stale jobs and retained 19 incomplete ones. No product, media item, or approval was changed by this reconciliation. New products still require the reviewed workbook and the existing manual photo workflow before publication.
+
+## 2026-10-28 — Resume gallery work after a featured image arrives
+
+Five older jobs had gained a featured image through another approved route while their galleries were still short of the configured minimum. Their original empty-image policy would have skipped any later gallery attachment. The worker now moves only an exact, published product with that condition to the existing append policy, preserving its job and manual editing step.
+
+The 43-test worker suite passed. After a backup and deployment, a live check moved exactly five gallery jobs to the append route and kept 14 drafts without a featured image in their prior states. No photo was uploaded or product published by this policy update; those outcomes still depend on reviewed desktop output.
