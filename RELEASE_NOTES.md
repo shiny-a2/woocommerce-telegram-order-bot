@@ -1,5 +1,20 @@
 # Public release notes
 
+## 2026-10-29 — Exact catalog source routes for two watch brands
+
+The catalog connector now reads the official collection pages for selected
+Orient and Orient Star models, and maps verified case specifications from an
+additional retailer for a Philipp Plein model. Product identity must match the
+full model code before facts enter a review workbook. The new retailer is a
+fourth data source for that brand; existing higher-priority sources remain in
+place.
+
+Forty-four focused tests passed. Live source checks found exact product facts
+and images for the sampled models. The change was deployed with backups, and
+four existing catalog jobs were resumed. Workbook approval is still required
+before any draft is created; image processing and publication were not part of
+this release.
+
 ## 2026-10-28 — More exact watch images and reviewable specifications
 
 The catalog worker now has an image fallback for several Tornado models absent
