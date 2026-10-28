@@ -1,5 +1,21 @@
 # Public release notes
 
+## 2026-10-28 — More exact watch images and reviewable specifications
+
+The catalog worker now has an image fallback for several Tornado models absent
+from the official regional stores. It accepts a retailer image only when the
+complete model code matches and the image comes from the reviewed delivery
+host. Two explicit case fields from a separate watch source now map to the
+existing review workbook columns, while unverified warranty and origin text
+remain for staff review.
+
+The image fallback matched five live models, and a sample image passed the
+file-quality check. A live Caterpillar record produced two mapped case fields.
+Twenty-one focused source and mapping tests passed. The changes were deployed
+with backups and the affected discovery jobs were resumed. Final product
+creation still requires workbook approval; image processing, attachment, and
+publication remain separate steps and were not verified by this release.
+
 ## 2026-10-27 — Additional official watch-image route deployed
 
 The connector reads one official watch site's product record and
