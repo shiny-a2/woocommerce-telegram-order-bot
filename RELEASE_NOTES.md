@@ -1,5 +1,20 @@
 # Public release notes
 
+## 2026-11-03 — More Tissot retailer coverage
+
+Four further Iranian retailers were added to the Tissot competitor view. Their
+public listings are matched by full manufacturer reference; products sold as
+two-watch sets are excluded from single-watch price comparisons. One retailer
+shows stock publicly but asks customers to call for prices, so its hidden API
+prices are left out of the comparison. The dealer view is unchanged.
+
+Thirty-nine focused tests passed. Four bounded local scans and five bounded
+production scans completed without source errors; the fifth refreshed an
+existing Tissot source. The management panel confirmed the five same-day
+sample-quality snapshots. A refreshed comparison workbook was checked for
+formula errors and now covers 40 observed rival sources. This is observed
+public stock and pricing, not a guarantee of physical inventory.
+
 ## 2026-11-03 — Broader Tissot competitor coverage
 
 The watch comparison workflow now supports public Tissot listings from three
