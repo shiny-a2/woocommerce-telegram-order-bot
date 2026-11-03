@@ -1,5 +1,18 @@
 # Public release notes
 
+## 2026-11-03 — Broader Tissot competitor coverage
+
+The watch comparison workflow now supports public Tissot listings from three
+more Iranian retailers and deeper brand listings at four existing retailers.
+It compares offers only when the full manufacturer reference matches, keeps
+Mathey Tissot separate, and leaves unclear prices or stock out of exact price
+comparisons. Brand-specific collection stays in the competitor view.
+
+Thirty-three focused tests passed. Local public scans produced reviewable price
+and availability rows; production activation and management-panel verification
+are still pending. The observations reflect each retailer's public listing at
+collection time, not a guarantee of its physical stock.
+
 ## 2026-10-29 — Exact catalog source routes for two watch brands
 
 The catalog connector now reads the official collection pages for selected
