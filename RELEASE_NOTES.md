@@ -1,5 +1,19 @@
 # Public release notes
 
+## 2026-11-03 — Three more Tissot retailers
+
+Three more Iranian retailers were added to the Tissot competitor view.
+Their public listings use full manufacturer references and reported stock.
+One retailer asks customers to call for prices, so it contributes stock
+observations without a price comparison. The dealer view is unchanged.
+
+Thirty-nine focused tests passed. Three bounded public-only scans and three
+bounded production scans completed without source errors, and public product
+pages were sampled. The management panel independently confirmed all three
+same-day sample-quality snapshots. A refreshed comparison workbook now covers
+43 observed rival sources. Public stock and prices are observations rather
+than physical inventory guarantees.
+
 ## 2026-11-03 — More Tissot retailer coverage
 
 Four further Iranian retailers were added to the Tissot competitor view. Their
