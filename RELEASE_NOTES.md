@@ -1,5 +1,18 @@
 # Public release notes
 
+## 2026-11-04 — Tissot preorder stock accuracy
+
+Some public WooCommerce catalogues mark a product as orderable while also
+flagging it as a backorder. The competitor collector now treats an explicit
+backorder as unavailable on hand, so preorder offers stay out of comparisons
+intended for products available from both stores.
+
+Forty-four local tests passed, including the shared and Tissot-only collection
+paths and snapshot valuation. A bounded source refresh and management-panel
+readback confirmed the corrected classification. Stock changes caused by this
+interpretation update are labelled suspect rather than candidate sales. Public
+stock declarations remain website observations, not physical inventory checks.
+
 ## 2026-11-03 — Three more Tissot retailers
 
 Three more Iranian retailers were added to the Tissot competitor view.
