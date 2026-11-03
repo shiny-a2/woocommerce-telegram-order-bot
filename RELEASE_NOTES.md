@@ -8,11 +8,17 @@ It compares offers only when the full manufacturer reference matches, keeps
 Mathey Tissot separate, and leaves unclear prices or stock out of exact price
 comparisons. Brand-specific collection stays in the competitor view.
 
-Thirty-three focused tests passed. Following a backed-up activation, seven
+Thirty-five focused tests passed. Following a backed-up activation, seven
 bounded source scans completed and the management panel confirmed their
 availability counts with sample-quality labels. The observations reflect each
 retailer's public listing at collection time, not a guarantee of its physical
 stock.
+
+A follow-up corrected the daily scheduled route for the brand-specific
+competitor sources. The installed entry point passed a simulated routing check
+for those sources and the existing dealer route without contacting retailers,
+sending messages or changing snapshots. The next live scheduled run has not
+yet been observed.
 
 ## 2026-10-29 — Exact catalog source routes for two watch brands
 
