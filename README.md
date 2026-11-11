@@ -170,4 +170,4 @@ All sensitive data lives in `.env` and is kept out of version control.
 
 ## Latest update
 
-[October 30, 2026 release notes](docs/releases/2026-10-30.md).
+[November 11, 2026 release notes](docs/releases/2026-11-11.md).
