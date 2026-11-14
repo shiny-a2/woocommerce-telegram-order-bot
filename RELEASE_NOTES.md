@@ -1,5 +1,21 @@
 # Public release notes
 
+## 2026-11-14 — Branch-aware order cards
+
+Order cards now show the named stock branch from the order operations record or
+recorded item allocation. Mixed orders include item-level locations. Current
+product stock is labelled as an inference, and unknown branches are never guessed.
+The same source is used when an existing card is updated; older stores retain the
+previous fallback behavior.
+
+Eight synthetic producer-to-consumer and caption/update checks pass, alongside
+21 existing special-order and financial display checks. The companion operations
+form retains who changed the location and when, and uses normal order polling to
+refresh cards. Publication checks cover deployed hashes, task health and read-only
+contract output. No real test order or group message is created, and historical
+cards are not forcibly replayed.
+
+
 ## 2026-11-04 — Tissot preorder stock accuracy
 
 Some public WooCommerce catalogues mark a product as orderable while also
