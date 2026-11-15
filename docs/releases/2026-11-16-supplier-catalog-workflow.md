@@ -61,3 +61,26 @@ Company membership, scoped management menus, private-chat denial and read-only
 site access were checked. All write controls remain disabled. A company-file
 trial and inventory ownership agreement are still required before activation. Financial posting and automatic order
 status changes are not implemented.
+
+
+## Prepared multi-sheet intake recovery
+
+A genuine company workbook exposed a gap in the generic reader: multiple sheets
+were held, and answering the document-purpose question did not provide a way to
+resume that saved file. The prepared follow-up reads the observed supplier layout
+across sheets and keeps internal item codes, references, titles and amounts
+distinct. A stock-only answer never authorizes price changes. Conflicting model
+identifiers and unexpected layouts remain visible for review.
+
+A manager can reopen the original file after its reader is available. The
+document hash, existing answers and concurrent decisions are protected. Dates
+that have expired lead to a current-validity decision or a hold. No file is treated
+as current merely because it was downloaded again.
+
+Validation covers 180 supplier/access/order tests and 32 separate catalog tests,
+plus a replay of the actual workbook and read-only catalog responses. The saved
+answer and row accounting were preserved, and no site write was performed. The
+new source is prepared as 2026.11.16.3; installation and resuming the saved batch
+are pending approval. The installed 2026.11.16.2 preview remains write-disabled.
+Private company files, product references and operational identifiers are not
+published here.
