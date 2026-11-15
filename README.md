@@ -170,7 +170,7 @@ All sensitive data lives in `.env` and is kept out of version control.
 
 ## Latest update
 
-[November 15, 2026 supplier document preparation](docs/releases/2026-11-15-supplier-file-review.md):
-company-bound XLS/XLSX review, source-cell traceability and scoped questions in
-reply to ambiguous files extend the supplier pilot. Implementation has 152 passing synthetic checks; production
-deployment and company activation remain pending.
+[November 16, 2026 supplier workflow preparation](docs/releases/2026-11-16-supplier-catalog-workflow.md):
+confirmed company files continue into exact previews, reviewed changes and
+traceable receipts. Automatic mode is explicitly enabled per company. Local
+checks pass; production deployment and real-company acceptance remain pending.
