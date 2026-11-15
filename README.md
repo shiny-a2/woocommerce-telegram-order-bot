@@ -170,4 +170,7 @@ All sensitive data lives in `.env` and is kept out of version control.
 
 ## Latest update
 
-[November 11, 2026 release notes](docs/releases/2026-11-11.md).
+[November 15, 2026 supplier pilot preparation](docs/releases/2026-11-15-supplier-pilot.md):
+bounded historical-card refresh, closed group access and reviewed supplier
+coordination. Implementation has 71 passing synthetic checks; production
+deployment and company activation remain pending.
