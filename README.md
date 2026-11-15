@@ -174,5 +174,5 @@ All sensitive data lives in `.env` and is kept out of version control.
 confirmed company files continue into exact previews, reviewed changes and
 traceable receipts. Automatic mode is explicitly enabled per company. Local
 checks pass; the preview is installed with all writes off and the company group
-is bound. A prepared follow-up asks one question at a time with two or three
-buttons. Its installation and real-company acceptance remain pending.
+is bound. The installed follow-up asks one question at a time with two or three
+buttons. Real-company acceptance remains pending.
