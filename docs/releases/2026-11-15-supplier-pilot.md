@@ -1,5 +1,9 @@
 # Reviewed supplier coordination and closed group access
 
+Current follow-up: [supplier document review](2026-11-15-supplier-file-review.md)
+adds sample-derived readers and company questions, with 152 passing synthetic
+checks. The sections below record the earlier preparation milestones.
+
 Prepared on November 15, 2026. Source implementation and local validation are
 complete for the first pilot; production deployment and company activation are
 pending. The pilot is disabled by default.
