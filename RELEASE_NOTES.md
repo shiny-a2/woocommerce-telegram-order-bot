@@ -1,5 +1,19 @@
 # Public release notes
 
+## 2026-11-15 — Warranty-derived supplier locations
+
+Order cards identify companies matched from warranty providers for eligible,
+available supplier-stock products. Physical branch stock and explicit staff
+assignments keep their existing precedence. Mixed orders retain per-item
+companies; missing or ambiguous providers never become guessed assignments.
+
+Eleven location/producer-to-consumer checks and 21 existing special-order and
+financial display tests pass with synthetic data. The companion operations form
+also passes mobile and desktop interactions. Publication verification checks
+source hashes, real read-only contracts and the bot task. No fabricated order,
+test group message or forced historical replay is used.
+
+
 ## 2026-11-14 — Branch-aware order cards
 
 Order cards now show the named stock branch from the order operations record or
