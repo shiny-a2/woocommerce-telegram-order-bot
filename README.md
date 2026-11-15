@@ -170,7 +170,8 @@ All sensitive data lives in `.env` and is kept out of version control.
 
 ## Latest update
 
-[November 16, 2026 supplier workflow preparation](docs/releases/2026-11-16-supplier-catalog-workflow.md):
+[November 16, 2026 supplier preview deployment](docs/releases/2026-11-16-supplier-catalog-workflow.md):
 confirmed company files continue into exact previews, reviewed changes and
 traceable receipts. Automatic mode is explicitly enabled per company. Local
-checks pass; production deployment and real-company acceptance remain pending.
+checks pass; the preview is installed with all writes off. Company-group binding
+and real-company acceptance remain pending.

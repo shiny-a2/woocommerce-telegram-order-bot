@@ -1,6 +1,6 @@
 # Supplier files from review to traceable updates
 
-The prepared workflow now carries confirmed supplier-file fields into an exact
+The workflow now carries confirmed supplier-file fields into an exact
 catalog preview. Managers see separate counts for proposed changes, held rows,
 completed updates, rejected changes and uncertain outcomes. Downloadable reports
 show proposed values and the receipts from earlier executions.
@@ -20,7 +20,18 @@ Validation includes 155 local supplier/access/order tests, 32 existing catalog
 tests, 63 isolated adapter checks and 61 inventory/company-resolution checks. A
 synthetic producer/consumer fixture verifies the shared API shape. These tests do
 not establish production database concurrency, external delivery or acceptance.
-Deployment and a controlled real-company exercise are still pending.
+A controlled real-company exercise is still pending.
 
 This note publishes behavior and validation only. Private source, commercial
 files, operational configuration and customer data are not included.
+
+The owner-approved preview has now been installed with write and supplier-order
+sending controls disabled. The bot restarted successfully, its source hashes
+matched the reviewed release, and the backup passed integrity checks. Live
+read-only snapshots respected existing inventory ownership; requests without
+credentials or a configured company were refused. Private/public command menus
+were cleared and management commands were scoped to authorized administrators.
+
+Company-group binding, a genuine file exercise and real database failure tests
+remain pending. This is preview deployment evidence, not acceptance of automatic
+price, stock, supplier-order or financial operations.
