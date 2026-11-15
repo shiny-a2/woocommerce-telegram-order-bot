@@ -32,6 +32,29 @@ read-only snapshots respected existing inventory ownership; requests without
 credentials or a configured company were refused. Private/public command menus
 were cleared and management commands were scoped to authorized administrators.
 
-Company-group binding, a genuine file exercise and real database failure tests
-remain pending. This is preview deployment evidence, not acceptance of automatic
+The company group is now bound after verifying the owner-initiated membership
+event and current membership. A genuine file exercise remains pending. This is preview deployment evidence, not acceptance of automatic
 price, stock, supplier-order or financial operations.
+
+
+## Prepared choice-question update
+
+Ambiguous files are classified through two or three buttons per question: first
+product list or financial document, then price, available stock or both. The
+company answers in the original file reply. Repeated and cross-group choices
+cannot overwrite the recorded answer. Managers answer one missing fact at a time;
+price/date confirmations include a hold option, and stale buttons reopen the
+current question without changing the recorded parameters. Clarification does
+not grant permission to update the store.
+
+The prepared bot version 2026.11.16.2 passed 165 supplier/access/order tests and
+32 catalog-consumer tests. The companion adapter also passed 34 real, isolated
+WordPress/WooCommerce/MariaDB assertions with synthetic products, including
+process termination, concurrent locks and rollback. This exposed and fixed a
+per-product cache problem during receipt recovery. The production cache plugin
+and full plugin stack were not covered. No test message or real order was sent.
+
+These source updates await installation approval. The installed preview remains
+write-disabled; a company-file trial and inventory ownership agreement are still
+required before any later activation. Financial posting and automatic order
+status changes are not implemented.
