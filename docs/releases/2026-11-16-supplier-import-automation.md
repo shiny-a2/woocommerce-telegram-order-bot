@@ -1,4 +1,4 @@
-# Supplier import follow-up — prepared release
+# Supplier import follow-up
 
 Completed bulk imports and supplier documents now feed the same product research
 and image review workflow. Explicit availability, an approved brand and a second
@@ -16,4 +16,11 @@ marked unavailable.
 The isolated, network-blocked sandbox passed 239 supplier, access, order and
 catalog tests. A separate cross-plugin WordPress/WooCommerce/MariaDB fixture
 passed 55 checks. No real messages or purchases were created for these tests.
-This is prepared source; production installation and activation remain pending.
+The reviewed source was installed after owner approval. Intake and scheduled
+follow-up were enabled; purchase dispatch and supplier price writes remain off.
+
+Installation checks matched committed source hashes, validated backups and
+confirmed the live API contract and rejection of unauthenticated requests. The
+existing bot and image worker remained operational. Actual output from the next
+genuine completed import and the next due reminder remain to be observed; no
+fabricated transaction or test message was sent.

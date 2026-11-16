@@ -1,6 +1,6 @@
 # woo-orderbot
 
-Prepared update: [supplier import follow-up and branch stock recovery](docs/releases/2026-11-16-supplier-import-automation.md). Production installation remains pending.
+Installed update: [supplier import follow-up and branch stock recovery](docs/releases/2026-11-16-supplier-import-automation.md), with live workflow observation still pending.
 
 A Telegram bot that turns WooCommerce orders into **live, self-updating order
 cards** in a group chat — with an interactive sales dashboard, automated
