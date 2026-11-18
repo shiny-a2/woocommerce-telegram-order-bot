@@ -4,4 +4,4 @@ The prepared integration processes an explicitly requested proposal for one used
 
 A saved attempt record precedes the paid call, and delivery retries reuse the saved output. Losing a connection or restarting the worker does not automatically request another paid image analysis. Reviewers can inspect a proposal before choosing whether to use it.
 
-Forty-one local provider/transport tests passed, including original-pixel preservation on synthetic scratches and text, geometry rejection, bounded output, timeout handling, saved-result retries and existing integration regressions. No paid natural-photo call, live replacement or production activation has been performed for this prepared change. Natural silhouette quality still requires human assessment.
+Forty-two local provider/transport tests passed, including original-pixel preservation on synthetic scratches and text, geometry rejection, bounded output, timeout handling, saved-result retries and existing integration regressions. No paid natural-photo call, live replacement or production activation has been performed for this prepared change. Natural silhouette quality still requires human assessment.
