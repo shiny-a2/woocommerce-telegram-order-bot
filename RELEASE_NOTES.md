@@ -1,5 +1,11 @@
 # Public release notes
 
+## Staff handoffs · November 24, 2026
+
+When a colleague takes over an operational role, open work and future supplier workbooks can follow the new assignment. Completed work keeps its original attribution. Staff retirement also stops group actions and follow-up reminders for the former operator.
+
+Tests covered group access after retirement and workbook delivery with a simulated recipient. A read-only production check confirmed the updated assignment and permissions.
+
 ## Supplier campaign workbooks · November 24, 2026
 
 Retail teams can send an accounting stock export, a list of available models, or a campaign offer sheet to the existing supplier intake. When the same model, quantity and discount appear twice in one offer sheet, the reader keeps one offer and records both row numbers. Conflicting entries stay visible for review. The review also distinguishes a regular retail price from a percentage discount.
