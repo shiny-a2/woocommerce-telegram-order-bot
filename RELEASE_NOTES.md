@@ -6,6 +6,8 @@ The management pilot groups company orders, stock lists, financial documents, an
 
 For supported spreadsheets, the invoice preview checks quantities, prices, discounts and line totals. It identifies items that match the reference and quantity actually requested from that supplier. Receipts stay available for accounting review. Local tests covered closed sales, duplicate announcements, supplier isolation, invoice arithmetic and the report destination. These checks used simulated deliveries.
 
+The supplier review update is now running alongside the current intake rules. Release verification checked the restarted worker, the installed files and creation of the sales-status table in an isolated database. The invoice preview remains a review step for accounting.
+
 ## Staff handoffs · November 24, 2026
 
 When a colleague takes over an operational role, open work and future supplier workbooks can follow the new assignment. Completed work keeps its original attribution. Staff retirement also stops group actions and follow-up reminders for the former operator.
