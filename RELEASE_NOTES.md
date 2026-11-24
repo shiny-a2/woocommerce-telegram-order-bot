@@ -1,5 +1,12 @@
 # Public release notes
 
+## 2026-11-24 — Official catalogue images and review
+
+Watches identified as available in a supplier catalogue can enter the existing product and image queue. The integration matches the exact supplier reference and keeps the original photo for Photoshop. Smaller official photos carry a review requirement into the upload step. A repeated intake reuses the existing job for the same brand and reference.
+
+Source checks covered real catalogue entries and image files. Regression tests exercised supplier intake and the desktop image bridge.
+
+
 ## 2026-11-15 — Warranty-derived supplier locations
 
 Order cards identify companies matched from warranty providers for eligible,
