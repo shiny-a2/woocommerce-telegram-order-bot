@@ -1,5 +1,16 @@
 # Public release notes
 
+## Supplier file review recovery · November 25, 2026
+
+An older company spreadsheet can retain an empty review after its reader gains
+support for that layout. Managers can now recheck the original file in its
+existing review record, with file integrity and the earlier review history
+preserved. A repeated upload points to that record instead of opening a second
+one. The update passed 124 supplier tests and was installed on the existing bot.
+Four previously empty reviews now show 470 product rows in total. Their price
+and availability changes remain held for a dated preview and the normal approval
+checks; this update did not change store prices or stock.
+
 ## Catalogue review continuity · November 24, 2026
 
 An Excel request can include a model already present in the store. The
