@@ -1,5 +1,12 @@
 # Public release notes
 
+## Supplier campaign workbooks · November 24, 2026
+
+Retail teams can send an accounting stock export, a list of available models, or a campaign offer sheet to the existing supplier intake. When the same model, quantity and discount appear twice in one offer sheet, the reader keeps one offer and records both row numbers. Conflicting entries stay visible for review. The review also distinguishes a regular retail price from a percentage discount.
+
+Validation covered 190 supplier tests and a separate replay of real workbooks. The replay checked the repeated-row case, explicit zero stock and the distinction between a family price and a full model reference.
+
+
 ## 2026-11-24 — Official catalogue images and review
 
 Watches identified as available in a supplier catalogue can enter the existing product and image queue. The integration matches the exact supplier reference and keeps the original photo for Photoshop. Smaller official photos carry a review requirement into the upload step. A repeated intake reuses the existing job for the same brand and reference.
