@@ -1,5 +1,11 @@
 # Public release notes
 
+## Supplier order and invoice review · November 24, 2026
+
+The management pilot groups company orders, stock lists, financial documents, and product research in separate report topics. When a supplier announces a sales closure, new dispatches wait while staff can continue tracking orders already sent.
+
+For supported spreadsheets, the invoice preview checks quantities, prices, discounts and line totals. It identifies items that match the reference and quantity actually requested from that supplier. Receipts stay available for accounting review. Local tests covered closed sales, duplicate announcements, supplier isolation, invoice arithmetic and the report destination. These checks used simulated deliveries.
+
 ## Staff handoffs · November 24, 2026
 
 When a colleague takes over an operational role, open work and future supplier workbooks can follow the new assignment. Completed work keeps its original attribution. Staff retirement also stops group actions and follow-up reminders for the former operator.
