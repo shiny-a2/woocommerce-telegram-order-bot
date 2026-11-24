@@ -1,5 +1,11 @@
 # Public release notes
 
+## Complete supplier inventory by brand · November 24, 2026
+
+Supplier workbooks can carry retail prices and availability in separate files. The reader recognises a confirmed complete inventory list for one brand and compares it with the supplier’s current stock. Names, model prefixes and retail calculations help resolve files with numeric filenames. A missing price or a conflicting reference is visible in the review.
+
+Automated checks covered repeated delivery, an older file arriving later, and a supplier withdrawal while the proposed price was under review. A separate WooCommerce integration checked that a watch still available at a branch stays available to shoppers.
+
 ## Supplier campaign workbooks · November 24, 2026
 
 Retail teams can send an accounting stock export, a list of available models, or a campaign offer sheet to the existing supplier intake. When the same model, quantity and discount appear twice in one offer sheet, the reader keeps one offer and records both row numbers. Conflicting entries stay visible for review. The review also distinguishes a regular retail price from a percentage discount.
