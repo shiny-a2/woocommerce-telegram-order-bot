@@ -1,5 +1,14 @@
 # Public release notes
 
+## Catalogue review continuity · November 24, 2026
+
+An Excel request can include a model already present in the store. The
+review workbook should still reach staff for the genuinely new models, and
+source retries for products available in a branch should retain their
+priority. The change passed 43 local catalogue tests. The bot update and
+priority markers on eight existing requests were installed and read back.
+The affected workbook is still waiting for its remaining product data.
+
 ## Stocked catalogue requests · November 24, 2026
 
 Released: catalogue requests backed by verified store stock can move ahead
