@@ -1,5 +1,25 @@
 # Public release notes
 
+## Staff handoffs · November 24, 2026
+
+When a colleague takes over an operational role, open work and future supplier workbooks can follow the new assignment. Completed work keeps its original attribution. Staff retirement also stops group actions and follow-up reminders for the former operator.
+
+Tests covered group access after retirement and workbook delivery with a simulated recipient. A read-only production check confirmed the updated assignment and permissions.
+
+## Supplier campaign workbooks · November 24, 2026
+
+Retail teams can send an accounting stock export, a list of available models, or a campaign offer sheet to the existing supplier intake. When the same model, quantity and discount appear twice in one offer sheet, the reader keeps one offer and records both row numbers. Conflicting entries stay visible for review. The review also distinguishes a regular retail price from a percentage discount.
+
+Validation covered 190 supplier tests and a separate replay of real workbooks. The replay checked the repeated-row case, explicit zero stock and the distinction between a family price and a full model reference.
+
+
+## 2026-11-24 — Official catalogue images and review
+
+Watches identified as available in a supplier catalogue can enter the existing product and image queue. The integration matches the exact supplier reference and keeps the original photo for Photoshop. Smaller official photos carry a review requirement into the upload step. A repeated intake reuses the existing job for the same brand and reference.
+
+Source checks covered real catalogue entries and image files. Regression tests exercised supplier intake and the desktop image bridge.
+
+
 ## 2026-11-15 — Warranty-derived supplier locations
 
 Order cards identify companies matched from warranty providers for eligible,
