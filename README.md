@@ -1,5 +1,7 @@
 # woo-orderbot
 
+Released [per-photo background review](docs/releases/photo-proposal-delivery-2026-11-18.md). The installed workflow returned a catalogue-photo preview for review.
+
 Installed update: [supplier import follow-up and branch stock recovery](docs/releases/2026-11-16-supplier-import-automation.md), with live workflow observation still pending.
 
 A Telegram bot that turns WooCommerce orders into **live, self-updating order
