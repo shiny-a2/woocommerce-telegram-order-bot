@@ -10,6 +10,8 @@ When two catalogue products share the same model number, the review now lists th
 
 Fractional amounts in a price column no longer count as document dates. A valid inventory sheet can therefore cover the full brand even when a price contains digits that resemble a date.
 
+A temporary connection failure during catalogue comparison now triggers a bounded retry. Price and inventory writes continue to use their original receipts.
+
 ## Supplier campaign workbooks · November 24, 2026
 
 Retail teams can send an accounting stock export, a list of available models, or a campaign offer sheet to the existing supplier intake. When the same model, quantity and discount appear twice in one offer sheet, the reader keeps one offer and records both row numbers. Conflicting entries stay visible for review. The review also distinguishes a regular retail price from a percentage discount.
