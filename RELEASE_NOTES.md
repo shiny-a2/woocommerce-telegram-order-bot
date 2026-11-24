@@ -1,5 +1,17 @@
 # Public release notes
 
+## Stocked catalogue requests · November 24, 2026
+
+Released: catalogue requests backed by verified store stock can move ahead
+within the existing Excel review queue. The worker keeps brand rotation,
+workbook approval and retry handling. This helps staff review products that
+customers can already buy in a branch without creating duplicate requests.
+
+The change passed 39 local catalogue tests and a read-only scheduling
+simulation. The bot source and 216 existing request markers were installed
+and read back. Product publication still depends on workbook approval and
+image processing; this release does not claim that those steps completed.
+
 ## Supplier order and invoice review · November 24, 2026
 
 The management pilot groups company orders, stock lists, financial documents, and product research in separate report topics. When a supplier announces a sales closure, new dispatches wait while staff can continue tracking orders already sent.
