@@ -1,5 +1,19 @@
 # Public release notes
 
+## Explicit competitor source failures · November 25, 2026
+
+The collector distinguishes hosting suspension and inaccessible robots policy
+from product availability. A bounded hosting check stops before a product
+snapshot is written, records a retry through the existing status path and
+preserves earlier observations. A complete inventory with a bounded analysis
+sample stays complete in the paired management screen.
+
+The three source files are installed after their compatible receiver, without
+a service restart or a new scheduled task. 162 targeted checks pass. Four
+fresh attempts confirmed upstream failures, the receiver accepted their
+statuses and original snapshots were unchanged. This release does not claim
+full catalogue recovery for sites that still refuse access.
+
 ## Supplier file review recovery · November 25, 2026
 
 An older company spreadsheet can retain an empty review after its reader gains
