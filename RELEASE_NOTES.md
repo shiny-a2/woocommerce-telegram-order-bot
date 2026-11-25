@@ -1,5 +1,22 @@
 # Public release notes
 
+## Scheduled coverage follows the active source registry · November 25, 2026
+
+The existing rival collection task now resolves its source selection from the
+active registry instead of a second hardcoded list. Twenty configured sources
+were absent from that task's list. Future configured sources are included on
+its next normal execution, with existing refusal, cooldown and partial-data
+rules preserved.
+
+The single wrapper change is installed and hash-verified. An integration test
+runs its actual arguments through the collector CLI for both the current
+registry and an added synthetic source; all sources are selected and each
+completed result is published separately. Four routing regression tests pass.
+The existing task interpreter imports the current collector and sees the full
+active registry. No task was started, recreated or rescheduled, and no service
+restart or paid API call was required. Upstream-inaccessible data remains
+explicitly incomplete.
+
 ## Bounded recovery of product-page interruptions · November 25, 2026
 
 A transient timeout or temporary server error now gets one retry within the
