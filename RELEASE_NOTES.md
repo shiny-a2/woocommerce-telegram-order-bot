@@ -1,5 +1,18 @@
 # Public release notes
 
+## Bounded recovery of product-page interruptions · November 25, 2026
+
+A transient timeout or temporary server error now gets one retry within the
+existing capture deadline and a small shared retry budget. Missing or invalid
+pages remain incomplete; explicit access or rate refusals stop queued work.
+Previously read rows and the source's retry advice are retained.
+
+Collector 1.4.12 is installed. 167 targeted checks pass, including complete
+recovery, bounded failures, deadlines, refusal and partial-row preservation.
+Native source hashes and unchanged dependencies were checked. No new worker,
+restart, scheduled job, paid API or catalogue-access bypass was added. Full
+recovery of upstream-blocked catalogues is not claimed.
+
 ## Explicit competitor source failures · November 25, 2026
 
 The collector distinguishes hosting suspension and inaccessible robots policy
