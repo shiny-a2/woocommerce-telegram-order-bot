@@ -1,5 +1,21 @@
 # Public release notes
 
+## Prepared source observations and recovery · November 25, 2026
+
+The existing supplier worker can observe a trusted source amount before financial
+approval, refresh its preview from the resulting site revision, and distinguish
+source checks from actual price changes in its history. Unknown results are
+reconciled from receipts; only proven non-commit permits a bounded retry.
+Preparation of new references continues independently of another row's receipt
+wait, using the existing catalog queue. Candidate 2026.11.25.4 also retains the
+reviewed complete-list reader and exact numeric-cell handling.
+
+Validation includes supplier regressions, temporary SQLite recovery and the real
+producer against an isolated WooCommerce adapter with a killed transaction. No
+production supplier messages or financial records were created. The candidate
+is not deployed, does not activate every supplier, and does not implement
+unconditional product publication. Full production acceptance remains pending.
+
 ## Scheduled coverage follows the active source registry · November 25, 2026
 
 The existing rival collection task now resolves its source selection from the
